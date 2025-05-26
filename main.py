@@ -30,11 +30,17 @@ def run():
 def keep_alive():
     t = threading.Thread(target=run)
     t.start()
+
 # ========== Setup ==========
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
-CHANNEL_ID = 1359688450445541559  # Your channel id here
+CHANNEL_ID = 1376362880978649098  # Your channel id here
 ADMIN_ID = 1199446551391633523  # Replace with actual admin user ID
+# ========== New Constants ==========
+TASK_CHANNEL_ID = 1376362923567612015  # Replace with your task channel ID
+REMINDER_DAYS = [7, 5, 3, 2, 1]
+MAX_LIVES = 3
+
 EST = pytz.timezone('US/Eastern')
 # Color Palette
 COLORS = {
@@ -66,7 +72,7 @@ class TaskBot(commands.Bot):
         self.user_tasks_created: Dict[int, List[Dict]] = {}
         self.task_counter = 0
         self.task_assignments: Dict[int, Dict[int, Dict]] = {}
-        # Remove default help command to implement custom one
+        self.user_lives: Dict[int, int] = {}  # New: Track user lives
         self.help_command = None
 
 
@@ -180,6 +186,131 @@ def parse_flexible_date(date_str: str, default_to_today: bool = False) -> str:
     raise ValueError(f"Could not parse date: {date_str}")
 
 
+async def cleanup_task_assignments():
+    # Create a mapping of all user IDs to their current display names
+    user_map = {}
+    for user_id in bot.task_assignments.keys():
+        try:
+            member = await bot.fetch_user(int(user_id))
+            user_map[user_id] = member.display_name
+        except:
+            continue
+
+    # Find and merge duplicate user entries
+    merged_assignments = {}
+    for user_id, tasks in bot.task_assignments.items():
+        if user_id not in merged_assignments:
+            merged_assignments[user_id] = tasks
+        else:
+            merged_assignments[user_id].update(tasks)
+
+    bot.task_assignments = merged_assignments
+    save_tasks(bot.task_assignments)
+
+
+async def update_task_channel():
+    channel = bot.get_channel(TASK_CHANNEL_ID)
+
+    def is_task_board(m):
+        return (m.author == bot.user and m.embeds and any(
+            embed.title.startswith("📋 ") and "Tasks" in embed.title
+            for embed in m.embeds))
+
+    await channel.purge(check=is_task_board)
+
+    comments = load_comments()
+
+    PRIORITY_COLORS = {
+        "very high": 0xFF0000,
+        "high": 0xFF4500,
+        "normal": 0xFFD700,
+        "low": 0x90EE90,
+        "very low": 0xFFFFFF
+    }
+
+    STATUS_EMOJIS = {
+        "Completed": "✅",
+        "In Progress": "🔄",
+        "Pending": "⏳",
+        "Overdue": "🚨",
+        "Due Today": "⚠️",
+        "Due Tomorrow": "🔔"
+    }
+
+    # First create a mapping of user IDs to their current display name
+    display_names = {}
+    for user_id in bot.task_assignments.keys():
+        try:
+            member = await bot.fetch_user(int(user_id))
+            display_names[user_id] = member.display_name
+        except:
+            display_names[user_id] = f"User {user_id}"
+
+    # Now create the embeds using the current display names
+    for user_id, tasks in bot.task_assignments.items():
+        if not tasks:  # Skip users with no tasks
+            continue
+
+        embed = discord.Embed(
+            title=f"📋 {display_names[user_id]}'s Tasks",
+            description=
+            f"Last updated: {datetime.now(EST).strftime('%Y-%m-%d %H:%M')}",
+            color=0x5865F2)
+
+        now = datetime.now(EST)
+        for task_id, task in tasks.items():
+            due_date = None
+            days_left = None
+
+            if task.get("due_date"):
+                try:
+                    due_date = datetime.fromisoformat(
+                        task["due_date"]).astimezone(EST)
+                    days_left = (due_date.date() - now.date()).days
+                except (ValueError, TypeError):
+                    pass
+
+            status = task.get("status", "Pending")
+
+            if status != "Completed" and due_date:
+                if days_left < 0:
+                    status = "Overdue"
+                elif days_left == 0:
+                    status = "Due Today"
+                elif days_left == 1:
+                    status = "Due Tomorrow"
+
+            priority = task.get("priority", "normal").lower()
+            emoji = STATUS_EMOJIS.get(status, "📝")
+            color = PRIORITY_COLORS.get(priority, 0xFFFFFF)
+
+            task_line = (
+                f"{emoji} `#{task_id}` **{task['description']}**\n"
+                f"▸ {status} | "
+                f"⏰ {due_date.strftime('%b %d %H:%M') if due_date else 'No deadline'} | "
+                f"🔮 {priority.title()} | "
+                f"💬 {len(comments.get(str(task_id), []))} comments")
+
+            embed.add_field(name="\u200b", value=task_line, inline=False)
+            embed.color = color
+
+        if embed.fields:
+            await channel.send(embed=embed)
+
+
+def load_lives():
+    try:
+        with open("lives.json", "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_lives(lives_data):
+    with open("lives.json", "w") as f:
+        json.dump(lives_data, f, indent=2)
+
+
 def load_logs():
     try:
         with open(LOG_FILE, "r") as f:
@@ -261,6 +392,101 @@ def save_comments(comments: Dict[str, List[Dict]]):
 
 
 # ========== UI Components ==========
+class TaskCreationModal(discord.ui.Modal, title="Create New Task"):
+
+    def __init__(self):
+        super().__init__()
+        self.add_item(
+            discord.ui.TextInput(label="Task Name",
+                                 placeholder="Enter task name...",
+                                 required=True,
+                                 max_length=100))
+        self.add_item(
+            discord.ui.TextInput(label="Description",
+                                 placeholder="Enter detailed description...",
+                                 style=discord.TextStyle.long,
+                                 required=True,
+                                 max_length=500))
+        self.add_item(
+            discord.ui.TextInput(label="Due Date & Time (YYYY-MM-DD HH:MM)",
+                                 placeholder="Leave blank for no due date",
+                                 required=False))
+        self.add_item(
+            discord.ui.TextInput(
+                label="Priority (very low/low/normal/high/very high)",
+                placeholder="normal",
+                required=False))
+        self.add_item(
+            discord.ui.TextInput(label="Points",
+                                 placeholder="10",
+                                 required=False))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Parse inputs
+        name = self.children[0].value
+        description = f"{name}: {self.children[1].value}"
+        due_datetime_str = self.children[2].value.strip()
+        priority = (self.children[3].value.strip().lower() or "normal")
+        points_str = self.children[4].value.strip() or "10"
+
+        # Validate priority
+        valid_priorities = ["very low", "low", "normal", "high", "very high"]
+        if priority not in valid_priorities:
+            priority = "normal"
+
+    # Validate points
+        try:
+            points = int(points_str)
+        except ValueError:
+            points = 10
+
+    # Parse due date & time
+        due_datetime = None
+        if due_datetime_str:
+            try:
+                due_datetime = EST.localize(
+                    datetime.strptime(due_datetime_str, "%Y-%m-%d %H:%M"))
+            except ValueError:
+                await interaction.response.send_message(
+                    "❌ Invalid date & time format! Please use YYYY-MM-DD HH:MM (24-hour format).",
+                    ephemeral=True)
+                return
+
+    # Create task entry
+        bot.task_counter += 1
+        task_id = bot.task_counter
+        task_info = {
+            "name": name,
+            "description": description,
+            "due_date": due_datetime.isoformat() if due_datetime else None,
+            "priority": priority,
+            "points": points,
+            "created_at": datetime.now(EST).isoformat(),
+            "status": "Pending"
+        }
+
+        # Save in user_tasks_created (only stored privately for now)
+        bot.user_tasks_created.setdefault(interaction.user.id,
+                                          {})[task_id] = task_info
+
+        # Confirm to user
+        embed = discord.Embed(title=f"📝 Task #{task_id} Added",
+                              color=COLORS["success"])
+        embed.add_field(name="Name", value=name, inline=False)
+        embed.add_field(name="Description", value=description, inline=False)
+        embed.add_field(name="Due Date/Time",
+                        value=due_datetime.strftime("%Y-%m-%d %H:%M")
+                        if due_datetime else "Not specified",
+                        inline=True)
+        embed.add_field(name="Priority", value=priority.title(), inline=True)
+        embed.add_field(name="Points", value=str(points), inline=True)
+        embed.set_footer(text=f"Created by {interaction.user.display_name}")
+
+        await interaction.response.send_message(embed=embed)
+
+    # DO NOT call update_task_channel here — it's only for public assignments
+
+
 class LogsPaginatedView(discord.ui.View):
 
     def __init__(self, member: discord.Member, logs: list, page: int = 0):
@@ -586,7 +812,7 @@ def create_info_embed(title: str, description: str) -> discord.Embed:
 
 
 # ========== Scheduled Tasks ==========
-@tasks.loop(time=time(18, 0))  # 6 PM UTC reminder to log work
+@tasks.loop(time=time(18, 0))  # 6 PM EST reminder to log work
 async def daily_log_reminder():
     channel = bot.get_channel(CHANNEL_ID)
     if channel is None:
@@ -650,38 +876,32 @@ async def send_summary_to_admin():
     # save_logs({})
 
 
-@tasks.loop(minutes=60)
+@tasks.loop(minutes=60)  # Runs hourly
 async def evening_ping_task():
-    now = datetime.now(EST).time()
-    if now < time(16, 0):
-        return
+    now = datetime.now(EST)
+    current_time = now.time()
+    today = now.date()
+
+    # Stop if it's before 4 PM or after midnight (but before next 4 PM)
+    if current_time < time(16, 0) or current_time >= time(0, 0):
+        return  # Exit if outside the 4 PM - midnight window
 
     channel = bot.get_channel(CHANNEL_ID)
-    if channel is None:
-        return
-
-    today = str(datetime.now(EST).date())
     user_logs = load_logs()
-    guild = channel.guild
-    members = [m for m in guild.members if not m.bot]
+    members = [m for m in channel.guild.members if not m.bot]
 
+    # Only ping users who haven't logged TODAY (even after midnight)
     slackers = [
         m.mention for m in members
-        if str(m.id) not in user_logs or today not in user_logs[str(m.id)]
+        if str(m.id) not in user_logs or str(today) not in user_logs[str(m.id)]
     ]
 
     if slackers:
-        embed = discord.Embed(
-            title="⚠️ Hourly Reminder After 8PM UTC",
+        await channel.send(embed=discord.Embed(
+            title="⚠️ Reminder: Log Your Work",
             description=
-            f"The following users haven't logged their work today: {', '.join(slackers)}",
-            color=COLORS["warning"])
-        embed.add_field(name="Action Required",
-                        value="Click below or use `!log` to log your work.",
-                        inline=False)
-        await channel.send(embed=embed, view=LogButton())
-    else:
-        evening_ping_task.stop()
+            f"These users haven't logged today: {', '.join(slackers)}. Log in now or im coming to touch you'll.",
+            color=COLORS["warning"]))
 
 
 @tasks.loop(hours=1)
@@ -689,7 +909,7 @@ async def check_overdue_tasks():
     await bot.wait_until_ready()
     tasks_data = load_tasks()
     now = datetime.now(EST).date()
-    channel = bot.get_channel(CHANNEL_ID)
+    channel = bot.get_channel(TASK_CHANNEL_ID)
     if channel is None:
         return
 
@@ -746,27 +966,18 @@ def admin_only():
 
 @bot.event
 async def on_ready():
+    print(f'Logged in as {bot.user} (ID: {bot.user.id})')
+    try:
+        with open("scores.json", "r") as f:
+            bot.user_scores = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        bot.user_scores = {}
 
-    @bot.event
-    async def on_ready():
-        if hasattr(bot, '_ready_called'):
-            print("⚠️ Duplicate bot instance detected - shutting down")
-            await bot.close()
-            return
-
-        bot._ready_called = True
-        print(f'Logged in as {bot.user} (ID: {bot.user.id})')
-
-    if not weekly_summary.is_running():
-        weekly_summary.start()
-    if not evening_ping_task.is_running():
-        evening_ping_task.start()
-    if bot._ready_called:
-        return
+    # Initialize your bot components here
     migrate_logs()
-    bot._ready_called = True
 
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    # Load lives data
+    bot.user_lives = load_lives()
 
     # Register persistent view
     bot.add_view(LogButton())
@@ -774,6 +985,7 @@ async def on_ready():
     # Initialize task tracking
     bot.task_assignments = load_tasks()
     bot.user_tasks_created = {}
+    bot.comments = load_comments()
 
     # Load existing task counter
     if bot.task_assignments:
@@ -782,7 +994,11 @@ async def on_ready():
             for user_tasks in bot.task_assignments.values() if user_tasks)
         bot.task_counter = max_id
 
-    # Start tasks
+    # FIRST - Update the task board
+    await cleanup_task_assignments()
+    await update_task_channel()
+
+    # THEN - Start background tasks
     if not daily_log_reminder.is_running():
         daily_log_reminder.start()
     if not send_summary_to_admin.is_running():
@@ -793,6 +1009,20 @@ async def on_ready():
         check_overdue_tasks.start()
     if not daily_reset_responders.is_running():
         daily_reset_responders.start()
+    if not check_due_dates.is_running():
+        check_due_dates.start()
+    if not weekly_summary.is_running():
+        weekly_summary.start()
+
+    print("Normalizing task storage...")
+    normalized_assignments = {}
+    for user_id, tasks in bot.task_assignments.items():
+        # Convert all user IDs to strings
+        normalized_assignments[str(user_id)] = tasks
+
+    bot.task_assignments = normalized_assignments
+    save_tasks(bot.task_assignments)
+    print("Task storage normalized")
 
 
 @bot.event
@@ -827,157 +1057,310 @@ async def on_raw_reaction_add(payload):
 async def custom_help(ctx, command_name: str = None):
     # Define admin commands (these will be hidden from regular users)
     admin_commands = {
-        "assign": "Assign a task to a member",
-        "forcework": "Ping everyone who hasn't logged work today",
-        "snooze": "Snooze your daily log reminder for X minutes",
-        "alllogs": "View all users' logs",
-        "forework": "Ping users who haven't logged today",
-        "backup": "Create a backup of all data",
-        "alltasks": "View all tasks in the system",
-        "resetlogs":
-        "Reset logs for a user or date\n Examples:\n !resetlogs @user - Reset all logs for a user \n!resetlogs 25 May - Reset logs for all users on May 25\n!resetlogs @user 25 May - Reset logs for specific user on May 25",
-        "completetask": "Mark a task as completed",
+        "assign": {
+            "description": "Assign a task to a member",
+            "syntax": "!assign @member <task_id>"
+        },
+        "forcework": {
+            "description": "Ping everyone who hasn't logged work today",
+            "syntax": "!forcework"
+        },
+        "alllogs": {
+            "description": "View all users' logs",
+            "syntax": "!alllogs"
+        },
+        "forework": {
+            "description": "Ping users who haven't logged today",
+            "syntax": "!forework"
+        },
+        "backup": {
+            "description": "Create a backup of all data",
+            "syntax": "!backup"
+        },
+        "alltasks": {
+            "description": "View all tasks in the system",
+            "syntax": "!alltasks"
+        },
+        "resetlogs": {
+            "description": "Reset logs for a user or date",
+            "syntax": "!resetlogs [@user] [date]"
+        },
+        "completetask": {
+            "description": "Mark a task as completed",
+            "syntax": "!completetask <task_id>"
+        },
+        "adjustpoints": {
+            "description": "Adjust user points",
+            "syntax": "!adjustpoints @member add/remove <amount>"
+        },
+        "addlife": {
+            "description": "Add a life to a user",
+            "syntax": "!addlife @member"
+        },
+        "removelife": {
+            "description": "Remove a life from a user",
+            "syntax": "!removelife @member"
+        },
+        "removetask": {
+            "description": "Remove tasks from users",
+            "syntax": "!removetask [@user] [task_id]"
+        }
     }
 
     # Define regular commands
     regular_commands = {
-        # Logging Commands
-        "log": "Log your daily work",
-        "viewlogs":
-        "View your logs or another user's logs (admin only for others)",
-        "editlog": "Edit your last log from a specific date",
-        "health": "View your daily logs in a beautiful format",
-        "exportlogs": "Export your logs as a text file",
-
-        # Task Commands
-        "addtask": "Add a new task",
-        "mytasks": "View your assigned tasks",
-        "updatetask": "Update a task's details",
-        "commenttask": "Add comment to a task",
-        "viewcomments": "View comments on a task",
-        "searchtasks": "Search your tasks by keyword",
-        "addcategory": "Add a category to a task",
-        "taskchart": "Visualize your tasks by priority",
-        "taskreminders": "Configure your task reminders",
-
-        # Gamification & Profile
-        "leaderboard": "Show the top contributors",
-        "profile": "View your profile and stats"
+        "log": {
+            "description": "Log your daily work",
+            "syntax": "!log <message>"
+        },
+        "viewlogs": {
+            "description": "View your logs",
+            "syntax": "!viewlogs [@user]"
+        },
+        "editlog": {
+            "description": "Edit your last log",
+            "syntax": "!editlog <date> <new_message>"
+        },
+        "health": {
+            "description": "View your logs in a beautiful format",
+            "syntax": "!health [@user]"
+        },
+        "exportlogs": {
+            "description": "Export your logs as a file",
+            "syntax": "!exportlogs"
+        },
+        "createtask": {
+            "description": "Create a new task (form)",
+            "syntax": "!createtask"
+        },
+        "addtask": {
+            "description": "Add a new task (command)",
+            "syntax": "!addtask \"description\" [due_date] [priority] [points]"
+        },
+        "mytasks": {
+            "description": "View your assigned tasks",
+            "syntax": "!mytasks"
+        },
+        "updatetask": {
+            "description":
+            "Update a task's details",
+            "syntax":
+            "!updatetask <task_id> \"new description\" [due_date] [priority]"
+        },
+        "commenttask": {
+            "description": "Add comment to a task",
+            "syntax": "!commenttask <task_id> <comment>"
+        },
+        "viewcomments": {
+            "description": "View comments on a task",
+            "syntax": "!viewcomments <task_id>"
+        },
+        "searchtasks": {
+            "description": "Search your tasks",
+            "syntax": "!searchtasks <keyword>"
+        },
+        "addcategory": {
+            "description": "Add a category to task",
+            "syntax": "!addcategory <task_id> <category>"
+        },
+        "taskchart": {
+            "description": "View tasks by priority",
+            "syntax": "!taskchart"
+        },
+        "leaderboard": {
+            "description": "Show top contributors",
+            "syntax": "!leaderboard"
+        },
+        "profile": {
+            "description": "View your profile",
+            "syntax": "!profile [@user]"
+        },
+        "checklives": {
+            "description": "Check your remaining lives",
+            "syntax": "!checklives [@user]"
+        },
+        "snooze": {
+            "description": "Snooze reminders",
+            "syntax": "!snooze <minutes>"
+        }
     }
 
     if command_name:
-        cmd_name = command_name.strip().lower()
+        # Handle specific command help
+        cmd_name = command_name.lower()
 
         # Check if it's an admin command first
         if cmd_name in admin_commands:
             if ctx.author.id == ADMIN_ID:
-                # Send detailed help in DM
+                # Delete the admin's message
                 try:
                     await ctx.message.delete()
                 except discord.Forbidden:
                     pass
 
-                embed = discord.Embed(title=f"📘 Admin Help: `{cmd_name}`",
-                                      description=admin_commands[cmd_name],
+                # Send help to DMs
+                cmd_info = admin_commands[cmd_name]
+                embed = discord.Embed(title=f"Admin Help: {cmd_name}",
+                                      description=cmd_info["description"],
                                       color=COLORS["primary"])
-
-                # Add usage examples for specific commands
-                if cmd_name == "assign":
-                    embed.add_field(name="Usage",
-                                    value="`!assign @member task_id`",
-                                    inline=False)
-                elif cmd_name == "forcework":
-                    embed.add_field(
-                        name="Usage",
-                        value=
-                        "`!forcework` - Pings all users who haven't logged today",
-                        inline=False)
+                embed.add_field(name="Syntax",
+                                value=f"`{cmd_info['syntax']}`",
+                                inline=False)
 
                 try:
                     await ctx.author.send(embed=embed)
                 except discord.Forbidden:
                     await ctx.send(
-                        f"⚠️ {ctx.author.mention}, I couldn't send you the help in DM. Check your privacy settings.",
+                        "⚠️ Couldn't DM you the help. Please enable DMs.",
                         delete_after=10)
-                return
             else:
-                # Non-admin tried to view admin command help - delete their message
-                try:
-                    await ctx.message.delete()
-                except discord.Forbidden:
-                    pass
-                return
-
-        # Handle regular command help
-        cmd = bot.get_command(cmd_name)
-        if not cmd:
-            await ctx.send(f"❌ No command named `{command_name}` found.")
+                # Non-admin trying to access admin command
+                await ctx.send("❌ Command not found", delete_after=5)
             return
 
-        embed = discord.Embed(title=f"📘 Help: `{cmd.name}`",
-                              description=regular_commands.get(
-                                  cmd_name, "No description available"),
-                              color=COLORS["primary"])
-
-        # Add specific usage examples
-        if cmd_name == "log":
-            embed.add_field(
-                name="Usage",
-                value="`!log \"What I did today\"` or click the log button",
-                inline=False)
-        elif cmd_name == "addtask":
-            embed.add_field(
-                name="Usage",
-                value=
-                "`!addtask \"description\" [due_date] [priority]`\nExample: `!addtask \"Fix login bug\" 2023-12-31 high`",
-                inline=False)
-
-        await ctx.send(embed=embed)
-        return
+        # Handle regular command help
+        if cmd_name in regular_commands:
+            cmd_info = regular_commands[cmd_name]
+            embed = discord.Embed(title=f"Help: {cmd_name}",
+                                  description=cmd_info["description"],
+                                  color=COLORS["primary"])
+            embed.add_field(name="Syntax",
+                            value=f"`{cmd_info['syntax']}`",
+                            inline=False)
+            await ctx.send(embed=embed)
+        else:
+            await ctx.send("❌ Command not found", delete_after=5)
 
     # No command specified - show general help
-    embed = discord.Embed(
-        title="📚 TaskBot Help Menu",
-        description="Use `!help <command>` for detailed info on any command.",
-        color=COLORS["primary"])
+    embed = discord.Embed(title="📚 TaskBot Help",
+                          description="Use `!help <command>` for more info",
+                          color=COLORS["primary"])
 
-    # Add regular command categories
+    # Add regular commands
     embed.add_field(
         name="📝 Logging Commands",
-        value="`log`, `viewlogs`, `editlog`, `health`, `exportlogs`",
+        value="\n".join([
+            f"`{cmd}`"
+            for cmd in ["log", "viewlogs", "editlog", "health", "exportlogs"]
+        ]),
         inline=False)
 
-    embed.add_field(
-        name="📋 Task Commands",
-        value=
-        "`addtask`, `mytasks`, `updatetask`, `completetask`, `commenttask`, `viewcomments`, `searchtasks`, `addcategory`, `taskchart`, `taskreminders`",
-        inline=False)
+    embed.add_field(name="📋 Task Commands",
+                    value="\n".join([
+                        f"`{cmd}`" for cmd in [
+                            "createtask", "addtask", "mytasks", "updatetask",
+                            "commenttask", "viewcomments", "searchtasks",
+                            "addcategory", "taskchart"
+                        ]
+                    ]),
+                    inline=False)
 
-    embed.add_field(name="🏆 Gamification",
-                    value="`leaderboard`, `profile`",
+    embed.add_field(name="🏆 Profile Commands",
+                    value="\n".join([
+                        f"`{cmd}`"
+                        for cmd in ["leaderboard", "profile", "checklives"]
+                    ]),
                     inline=False)
 
     await ctx.send(embed=embed)
 
-    # If user is admin, send admin commands in DM
+    # If admin, send admin commands in DM
     if ctx.author.id == ADMIN_ID:
         admin_embed = discord.Embed(
             title="⚙️ Admin Commands",
-            description="These commands are only available to you.",
+            description="These commands are only available to you",
             color=COLORS["primary"])
-        admin_embed.add_field(name="Admin Tools",
-                              value="\n".join([
-                                  f"`{cmd}` - {desc}"
-                                  for cmd, desc in admin_commands.items()
-                              ]),
-                              inline=False)
-
+        admin_embed.add_field(
+            name="Admin Tools",
+            value="\n".join([f"`{cmd}`" for cmd in admin_commands.keys()]),
+            inline=False)
         try:
             await ctx.author.send(embed=admin_embed)
         except discord.Forbidden:
-            await ctx.send(
-                f"⚠️ {ctx.author.mention}, I couldn't send you the admin commands. Check your privacy settings.",
-                delete_after=10)
+            await ctx.send("⚠️ Couldn't DM you admin commands",
+                           delete_after=10)
+
+
+@bot.command(name="leaderboard",
+             aliases=["lb"],
+             help="Show the current leaderboard")
+async def leaderboard(ctx):
+    if not hasattr(bot, 'user_scores') or not bot.user_scores:
+        embed = discord.Embed(
+            title="🏆 Leaderboard",
+            description="No scores yet! Complete tasks to earn points.",
+            color=COLORS["primary"])
+        return await ctx.send(embed=embed)
+
+    # Sort users by score (descending)
+    sorted_scores = sorted(bot.user_scores.items(),
+                           key=lambda x: x[1],
+                           reverse=True)
+
+    embed = discord.Embed(title="🏆 Leaderboard - Top Contributors",
+                          color=COLORS["primary"])
+
+    # Add top 10 users to embed
+    for rank, (user_id, score) in enumerate(sorted_scores[:10], 1):
+        member = ctx.guild.get_member(int(user_id))
+        name = member.display_name if member else f"User ID {user_id}"
+        embed.add_field(name=f"{rank}. {name}",
+                        value=f"🔹 {score} points",
+                        inline=False)
+
+    embed.set_footer(text=f"Total participants: {len(bot.user_scores)}")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="adjustpoints",
+             help="Add or remove points from a user (Admin only)")
+@is_admin()
+async def adjust_points(ctx, member: discord.Member, action: str, amount: int):
+    """
+    !adjustpoints @user add 50
+    !adjustpoints @user remove 30
+    """
+    action = action.lower()
+
+    if action not in ["add", "remove"]:
+        return await ctx.send("❌ Invalid action. Use 'add' or 'remove'.")
+
+    if amount <= 0:
+        return await ctx.send("❌ Amount must be positive.")
+
+    # Load current scores
+    try:
+        with open("scores.json", "r") as f:
+            scores = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        scores = {}
+
+    current_score = scores.get(str(member.id), 0)
+
+    if action == "add":
+        new_score = current_score + amount
+        action_word = "added to"
+    else:
+        new_score = max(0, current_score - amount)  # Prevent negative scores
+        action_word = "removed from"
+
+    # Update scores
+    scores[str(member.id)] = new_score
+    with open("scores.json", "w") as f:
+        json.dump(scores, f, indent=2)
+
+    # Update in-memory scores if needed
+    if hasattr(bot, 'user_scores'):
+        bot.user_scores[str(member.id)] = new_score
+
+    embed = discord.Embed(
+        title="✅ Points Adjusted",
+        description=f"{amount} points {action_word} {member.mention}",
+        color=COLORS["success"])
+    embed.add_field(name="New Score", value=f"{new_score} points")
+    embed.set_footer(text=f"Adjusted by {ctx.author.display_name}")
+
+    await ctx.send(embed=embed)
 
 
 @bot.command(name="forcework",
@@ -1134,8 +1517,8 @@ async def edit_log(ctx, date: str, *, new_desc: str):
 
     # Edit the last log entry for that date
     user_logs[user_id][date_str][-1]["log"] = new_desc
-    user_logs[user_id][date_str][-1]["timestamp"] = datetime.utcnow(
-    ).isoformat()
+    user_logs[user_id][date_str][-1]["timestamp"] = datetime.now(
+        EST).isoformat()
     save_logs(user_logs)
 
     await ctx.send(f"✅ Updated your last log on `{date_str}` to:\n`{new_desc}`"
@@ -1229,13 +1612,14 @@ async def snooze(ctx, minutes: int):
 
 @bot.command(name="addtask")
 async def add_task(ctx, *, args=None):
-    """Add a new task with standard date format (YYYY-MM-DD) and optional priority"""
+    """Add a new task with standard date format (YYYY-MM-DD), optional priority, and points"""
     if not args:
         embed = create_error_embed(
             "Invalid Format",
-            "Usage: `!addtask \"description\" [due_date] [priority]`\n"
+            "Usage: `!addtask \"description\" [due_date] [priority] [points]`\n"
             "• Date must be in format `YYYY-MM-DD`\n"
-            "• Priority can be `low`, `normal`, or `high`")
+            "• Priority can be `low`, `normal`, or `high`\n"
+            "• Points is a number (default 10)")
         return await ctx.send(embed=embed)
 
     import shlex
@@ -1254,10 +1638,13 @@ async def add_task(ctx, *, args=None):
 
     due_date = None
     priority = "normal"
+    points = 10  # Default points
 
     for token in remaining:
         if token.lower() in {"low", "normal", "high"}:
             priority = token.lower()
+        elif token.isdigit():
+            points = int(token)
         else:
             try:
                 due_date = datetime.strptime(token, "%Y-%m-%d")
@@ -1271,6 +1658,7 @@ async def add_task(ctx, *, args=None):
         "description": description,
         "due_date": due_date.isoformat() if due_date else None,
         "priority": priority,
+        "points": points,  # Add points to task
         "created_at": str(datetime.now(EST)),
     }
 
@@ -1284,9 +1672,11 @@ async def add_task(ctx, *, args=None):
         value=due_date.strftime("%Y-%m-%d") if due_date else "Not specified",
         inline=True)
     embed.add_field(name="Priority", value=priority.capitalize(), inline=True)
+    embed.add_field(name="Points", value=str(points), inline=True)
     embed.set_footer(text=f"Created by {ctx.author.display_name}")
 
     await ctx.send(embed=embed)
+    await update_task_channel()  # Update task channel
 
 
 @bot.command(name="assign",
@@ -1310,10 +1700,13 @@ async def assign_task(ctx, member: discord.Member, task_id: int):
     bot.task_assignments[member.id][task_id] = dict(task_found)
     bot.task_assignments[member.id][task_id]["status"] = "Pending"
     bot.task_assignments[member.id][task_id]["assigned_to"] = member.id
+    bot.task_assignments[
+        member.id][task_id]["assigned_name"] = member.display_name
     save_tasks(bot.task_assignments)
 
     due_str = f", due by {task_found['due_date']}" if task_found[
         'due_date'] else ""
+    points_str = f" | Points: {task_found.get('points', 0)}"
 
     embed = discord.Embed(
         title="📌 Task Assigned",
@@ -1329,28 +1722,183 @@ async def assign_task(ctx, member: discord.Member, task_id: int):
     embed.add_field(name="Priority",
                     value=task_found.get('priority', 'Normal').capitalize(),
                     inline=True)
+    embed.add_field(name="Points",
+                    value=str(task_found.get('points', 0)),
+                    inline=True)
 
+    await ctx.send(embed=embed)
+    await update_task_channel()  # Update task channel
+
+
+@bot.command(name="completetask", help="Mark a task as completed")
+async def complete_task(ctx, task_id: int):
+    user_tasks = bot.task_assignments.get(ctx.author.id, {})
+    if task_id not in user_tasks:
+        embed = create_error_embed("Not Found",
+                                   "Task ID not found in your assignments.")
+        return await ctx.send(embed=embed)
+
+    task = user_tasks[task_id]
+    task["status"] = "Completed"
+    task["completed_at"] = str(datetime.now(EST))
+    points = task.get("points", 10)
+
+    # Update scores in memory AND save to disk
+    bot.user_scores[str(
+        ctx.author.id)] = bot.user_scores.get(str(ctx.author.id), 0) + points
+
+    # Save to file
+    with open("scores.json", "w") as f:
+        json.dump(bot.user_scores, f)
+
+    embed = create_success_embed(
+        "Task Completed",
+        f"Task #{task_id} marked as completed!\n+{points} points! Your total score: {bot.user_scores[str(ctx.author.id)]}"
+    )
     await ctx.send(embed=embed)
 
 
-@bot.command(name="mytasks", help="View your assigned tasks")
+@bot.command(name="createtask", help="Create a new task using a form")
+async def create_task(ctx):
+    """Create a task using a pop-up form"""
+    # Create a view with a button that will trigger the modal
+    view = discord.ui.View()
+
+    # Add a button that will show the modal when clicked
+    button = discord.ui.Button(label="Create Task",
+                               style=discord.ButtonStyle.primary)
+
+    async def button_callback(interaction):
+        await interaction.response.send_modal(TaskCreationModal())
+
+    button.callback = button_callback
+    view.add_item(button)
+
+    await ctx.send("Click the button below to create a new task:", view=view)
+
+
+# ========== New Life System Commands ==========
+
+
+@bot.command(name="addlife", help="Add a life to a user (Admin only)")
+@admin_only()
+async def add_life(ctx, member: discord.Member):
+    try:
+        # Try to delete the command message first
+        await ctx.message.delete()
+    except discord.Forbidden:
+        pass  # Bot doesn't have permission to delete messages
+
+    lives = load_lives()
+    current_lives = lives.get(str(member.id), 0)
+
+    if current_lives >= MAX_LIVES:
+        embed = discord.Embed(
+            title="❤️ Max Lives",
+            description=
+            f"{member.mention} already has the maximum of {MAX_LIVES} lives.",
+            color=COLORS["success"])
+        return await ctx.send(embed=embed,
+                              delete_after=30)  # Auto-delete after 30 seconds
+
+    lives[str(member.id)] = current_lives + 1
+    save_lives(lives)
+    bot.user_lives[member.id] = current_lives + 1
+
+    embed = discord.Embed(
+        title="✨ Life Added",
+        description=(
+            f"{member.mention} got a life added!\n"
+            f"Good job on working hard. ❤️ {current_lives + 1}/{MAX_LIVES}"),
+        color=COLORS["success"])
+    await ctx.send(embed=embed,
+                   delete_after=30)  # Auto-delete after 30 seconds
+
+
+@bot.command(name="removelife", help="Remove a life from a user (Admin only)")
+@admin_only()
+async def remove_life(ctx, member: discord.Member):
+    try:
+        # Try to delete the command message first
+        await ctx.message.delete()
+    except discord.Forbidden:
+        pass  # Bot doesn't have permission to delete messages
+
+    lives = load_lives()
+    current_lives = lives.get(str(member.id), 0)
+
+    if current_lives <= 0:
+        embed = discord.Embed(
+            title="⚡ Strike Issued",
+            description=
+            (f"{member.mention} has been hit by a strike!\n"
+             f"🚨 You now have 0 lives remaining.\n"
+             f"This will result in high penalties that will be discussed in our next meeting."
+             ),
+            color=COLORS["error"])
+        return await ctx.send(embed=embed, delete_after=30)
+
+    lives[str(member.id)] = current_lives - 1
+    save_lives(lives)
+    bot.user_lives[member.id] = current_lives - 1
+
+    remaining = current_lives - 1
+    if remaining > 0:
+        message = (f"{member.mention} has been hit by a strike!\n"
+                   f"❤️ Remaining lives: {remaining}/{MAX_LIVES}\n"
+                   f"Please make sure you're on track.")
+        color = COLORS["warning"]
+    else:
+        message = (
+            f"{member.mention} has been hit by a strike!\n"
+            f"🚨 You now have 0 lives remaining.\n"
+            f"This will result in high penalties that will be discussed in our next meeting."
+        )
+        color = COLORS["error"]
+
+    embed = discord.Embed(title="⚡ Life Removed",
+                          description=message,
+                          color=color)
+    await ctx.send(embed=embed, delete_after=30)
+
+
+@bot.command(name="checklives", help="Check your remaining lives")
+async def check_lives(ctx, member: discord.Member = None):
+    member = member or ctx.author
+    lives = load_lives()
+    current_lives = lives.get(str(member.id), 0)
+
+    embed = discord.Embed(
+        title=f"❤️ {member.display_name}'s Lives",
+        description=f"Current lives: {current_lives}/{MAX_LIVES}",
+        color=COLORS["primary"])
+    await ctx.send(embed=embed)
+
+
+# ========== Modified on_ready ==========
+
+
+@bot.command(name="mytasks")
 async def my_tasks(ctx):
-    user_tasks = bot.task_assignments.get(ctx.author.id, {})
-    if not user_tasks:
-        embed = create_info_embed("No Tasks", "You have no assigned tasks.")
-        return await ctx.send(embed=embed)
+    user_id = ctx.author.id
+    tasks = bot.task_assignments.get(user_id, {})
 
-    embed = discord.Embed(title=f"📋 Your Tasks ({len(user_tasks)})",
-                          color=COLORS["primary"])
+    if not tasks:
+        await ctx.send("ℹ️ No Tasks\nYou have no assigned tasks.")
+        return
 
-    for tid, task in user_tasks.items():
-        status_emoji = "✅" if task.get("status") == "Completed" else "⏳"
-        due_date = task.get("due_date", "No due date")
-        embed.add_field(
-            name=
-            f"{status_emoji} Task #{tid} - {task.get('priority', 'Normal').capitalize()}",
-            value=f"**{task.get('description')}**\nDue: {due_date}",
-            inline=False)
+    embed = discord.Embed(title="🗂️ Your Tasks", color=discord.Color.blurple())
+    for task_id, task in tasks.items():
+        due_date = (datetime.fromisoformat(task["due_date"]).astimezone(EST)
+                    if task.get("due_date") else None)
+        status = task.get("status", "Pending")
+        task_line = (
+            f"`#{task_id}` **{task['description']}**\n"
+            f"▸ {status} | "
+            f"⏰ {due_date.strftime('%b %d %H:%M') if due_date else 'No deadline'} | "
+            f"🔮 {task.get('priority', 'Normal').title()} | "
+            f"💬 {0} comments")
+        embed.add_field(name="\u200b", value=task_line, inline=False)
 
     await ctx.send(embed=embed)
 
@@ -1472,10 +2020,13 @@ async def update_task(ctx, *, args=None):
 @bot.command(name="commenttask",
              help="Add comment to a task: !commenttask <task ID> <comment>")
 async def comment_task(ctx, task_id: int, *, comment: str):
-    user_tasks = bot.task_assignments.get(ctx.author.id, {})
-    if task_id not in user_tasks:
+    # Check if task exists in any user's assignments
+    task_exists = any(task_id in tasks
+                      for tasks in bot.task_assignments.values())
+
+    if not task_exists:
         embed = create_error_embed("Not Found",
-                                   "Task ID not found in your assignments.")
+                                   "Task ID not found in the system.")
         return await ctx.send(embed=embed)
 
     comments = load_comments()
@@ -1492,6 +2043,7 @@ async def comment_task(ctx, task_id: int, *, comment: str):
     embed = create_success_embed(
         "Comment Added", f"Your comment has been added to task #{task_id}.")
     await ctx.send(embed=embed)
+    await update_task_channel()
 
 
 @bot.command(name="health", help="View your daily logs in a beautiful format")
@@ -1501,7 +2053,7 @@ async def health(ctx, member: discord.Member = None):
     # Permission check
     if member != ctx.author and ctx.author.id != ADMIN_ID:
         embed = discord.Embed(
-            title="⛔ ACCESS DENIED",
+            title="⛔ Access Denied",
             description=f"You can't view {member.display_name}'s logs",
             color=COLORS["error"])
         return await ctx.send(embed=embed, delete_after=10)
@@ -1511,23 +2063,14 @@ async def health(ctx, member: discord.Member = None):
 
     if not user_logs:
         embed = discord.Embed(
-            title="📭 NO LOGS FOUND",
+            title="📭 No Logs Found",
             description=f"{member.display_name} hasn't logged anything yet!",
             color=COLORS["warning"])
-        # Add the log button to empty state
-        view = LogButton()
-        return await ctx.send(embed=embed, view=view)
+        return await ctx.send(embed=embed, view=LogButton())
 
-    # Create paginated view with the button
+    # Create paginated view
     view = HealthLogsView(member.id, user_logs)
     embed = view.create_embed()
-
-    # Add the log button to the view
-    view.add_item(
-        Button(label="➕ Add New Log",
-               style=discord.ButtonStyle.green,
-               custom_id="add_log_button"))
-
     await ctx.send(embed=embed, view=view)
 
 
@@ -1680,61 +2223,111 @@ async def reset_logs(ctx, *, args: str = None):
         await ctx.send(embed=error_embed)
 
 
-@bot.command(name="completetask",
-             help="Mark a task as completed: !completetask <task ID>")
-async def complete_task(ctx, task_id: int):
-    user_tasks = bot.task_assignments.get(ctx.author.id, {})
-    if task_id not in user_tasks:
-        embed = create_error_embed("Not Found",
-                                   "Task ID not found in your assignments.")
-        return await ctx.send(embed=embed)
+@bot.command(name="removetask")
+@is_admin()
+@admin_only()
+async def remove_task(ctx, *, args: str = None):
+    """Remove tasks for a specific user, task ID, or combination of both."""
+    if not args:
+        embed = discord.Embed(
+            title="❌ Invalid Usage",
+            description=
+            "You must specify at least a user or task ID.\nExamples:\n"
+            "• `!removetask @user` - Remove all tasks for a user\n"
+            "• `!removetask 123` - Remove task with ID 123\n"
+            "• `!removetask @user 123` - Remove task 123 for specific user",
+            color=COLORS["error"])
+        await ctx.send(embed=embed)
+        return
 
-    task = user_tasks[task_id]
-    task["status"] = "Completed"
-    task["completed_at"] = str(datetime.now(EST))
-    save_tasks(bot.task_assignments)
+    try:
+        # Initialize variables
+        member = None
+        task_id = None
 
-    # Update user score (gamification)
-    bot.user_scores[ctx.author.id] = bot.user_scores.get(ctx.author.id, 0) + 10
+        # Check if the input contains a user mention
+        if ctx.message.mentions:
+            member = ctx.message.mentions[0]
+            # Get the remaining part of the argument after mention
+            task_part = args.replace(member.mention, "").strip()
+        else:
+            task_part = args.strip()
 
-    embed = create_success_embed(
-        "Task Completed",
-        f"Task #{task_id} marked as completed!\n+10 points! Your total score: {bot.user_scores[ctx.author.id]}"
-    )
-    await ctx.send(embed=embed)
+        # Try to parse task ID if there's a remaining part
+        if task_part:
+            try:
+                task_id = int(task_part)
+            except ValueError:
+                await ctx.send("❌ Task ID must be a number")
+                return
+
+        # Case 1: Remove all tasks for a specific user
+        if member and not task_id:
+            target_id = str(member.id)
+            if target_id not in bot.task_assignments or not bot.task_assignments[
+                    target_id]:
+                await ctx.send(f"📭 No tasks found for {member.display_name}.")
+                return
+
+            count = len(bot.task_assignments[target_id])
+            del bot.task_assignments[target_id]
+            save_tasks(bot.task_assignments)
+            await ctx.send(
+                f"✅ Removed all {count} tasks for {member.display_name}.")
+            await update_task_channel()
+            return  # <-- THIS IS CRUCIAL
+
+        # Case 2: Remove specific task for specific user
+        elif member and task_id:
+            target_id = str(member.id)
+            if target_id not in bot.task_assignments:
+                await ctx.send(f"📭 No tasks found for {member.display_name}.")
+                return
+
+            if task_id not in bot.task_assignments[target_id]:
+                await ctx.send(
+                    f"📭 Task {task_id} not found for {member.display_name}.")
+                return
+
+            del bot.task_assignments[target_id][task_id]
+            save_tasks(bot.task_assignments)
+            await ctx.send(
+                f"✅ Removed task {task_id} for {member.display_name}.")
+            await update_task_channel()
+            return  # <-- THIS IS CRUCIAL
+
+        # Case 3: Remove task by ID (search all users)
+        elif task_id and not member:
+            removed = False
+            for user_id, tasks in list(bot.task_assignments.items()):
+                if task_id in tasks:
+                    del tasks[task_id]
+                    removed = True
+                    member = await bot.fetch_user(int(user_id))
+                    break
+
+            if removed:
+                save_tasks(bot.task_assignments)
+                await ctx.send(
+                    f"✅ Removed task {task_id} (was assigned to {member.display_name})."
+                )
+                await update_task_channel()
+                return  # <-- THIS IS CRUCIAL
+            else:
+                await ctx.send(f"📭 Task {task_id} not found.")
+                return
+
+        # If we get here, no valid case was matched
+        await ctx.send(
+            "❌ Invalid command usage. See !help removetask for examples.")
+
+    except Exception as e:
+        error_embed = discord.Embed(title="❌ Error Removing Task",
+                                    description=f"An error occurred: {str(e)}",
+                                    color=COLORS["error"])
+        await ctx.send(embed=error_embed)
 
 
-# 2. Gamification Leaderboard
-@bot.command(name="leaderboard",
-             aliases=["lb"],
-             help="Show the top contributors")
-async def leaderboard(ctx):
-    if not bot.user_scores:
-        embed = create_info_embed(
-            "Leaderboard", "No scores yet! Complete tasks to earn points.")
-        return await ctx.send(embed=embed)
-
-    sorted_scores = sorted(bot.user_scores.items(),
-                           key=lambda x: x[1],
-                           reverse=True)
-
-    embed = discord.Embed(
-        title="🏆 Leaderboard",
-        description="Top contributors based on completed tasks",
-        color=COLORS["neutral"])
-
-    for rank, (user_id, score) in enumerate(sorted_scores[:10], 1):
-        user = ctx.guild.get_member(user_id)
-        if user:
-            embed.add_field(name=f"{rank}. {user.display_name}",
-                            value=f"🔹 {score} points",
-                            inline=False)
-
-    embed.set_thumbnail(url="https://i.imgur.com/Vk9KJ1B.png")
-    await ctx.send(embed=embed)
-
-
-# 3. Task Search Functionality
 @bot.command(name="searchtasks",
              help="Search your tasks: !searchtasks <keyword>")
 async def search_tasks(ctx, *, keyword: str):
@@ -1763,6 +2356,47 @@ async def search_tasks(ctx, *, keyword: str):
         due = task.get("due_date", "No due date")
         embed.add_field(name=f"Task #{tid} - {status}",
                         value=f"**{task['description']}**\nDue: {due}",
+                        inline=False)
+
+    await ctx.send(embed=embed)
+    await update_task_channel()
+
+
+@bot.command(name="taskdebug")
+@is_admin()
+async def task_debug(ctx):
+    """Debug the task storage system"""
+    embed = discord.Embed(title="Task System Debug", color=COLORS["primary"])
+
+    # Show how user IDs are stored
+    id_types = {}
+    for user_id in bot.task_assignments.keys():
+        id_type = type(user_id).__name__
+        id_types[id_type] = id_types.get(id_type, 0) + 1
+
+    embed.add_field(name="User ID Storage Types",
+                    value="\n".join(f"{k}: {v}" for k, v in id_types.items()),
+                    inline=False)
+
+    # Show specific tasks for the command author
+    str_id = str(ctx.author.id)
+    int_id = ctx.author.id
+    author_tasks = []
+
+    if str_id in bot.task_assignments:
+        author_tasks.extend(bot.task_assignments[str_id].items())
+    if int_id in bot.task_assignments:
+        author_tasks.extend(bot.task_assignments[int_id].items())
+
+    if author_tasks:
+        task_list = "\n".join(f"ID {tid}: {task['description']}"
+                              for tid, task in author_tasks)
+        embed.add_field(name=f"Your Tasks ({len(author_tasks)})",
+                        value=task_list,
+                        inline=False)
+    else:
+        embed.add_field(name="Your Tasks",
+                        value="No tasks found under either ID type",
                         inline=False)
 
     await ctx.send(embed=embed)
@@ -1795,6 +2429,54 @@ async def add_category(ctx, task_id: int, *, category: str):
             f"Task #{task_id} already has category '{category}'")
 
     await ctx.send(embed=embed)
+    await update_task_channel()
+
+
+@tasks.loop(hours=1)  # Check every hour instead of every 12 hours
+async def check_due_dates():
+    now = datetime.now(EST).time()
+    if time(0, 0) <= now < time(5, 0):  # Between midnight and 5 AM
+        return
+    channel = bot.get_channel(TASK_CHANNEL_ID)
+    await bot.wait_until_ready()
+
+    today = now.date()
+
+    for user_id, tasks in bot.task_assignments.items():
+        member = await bot.fetch_user(int(user_id))
+        for task_id, task in tasks.items():
+            if task.get("status") == "Completed" or not task.get("due_date"):
+                continue
+
+            try:
+                due_date = datetime.fromisoformat(
+                    task["due_date"]).astimezone(EST)
+                time_left = due_date - now
+
+                if time_left.total_seconds() <= 0:
+                    # Overdue
+                    if not task.get('reminded_overdue'):
+                        embed = discord.Embed(
+                            title="🚨 Task Overdue!",
+                            description=f"Task `#{task_id}` is now overdue!",
+                            color=COLORS["error"])
+                        await channel.send(f"{member.mention}", embed=embed)
+                        task['reminded_overdue'] = True
+
+                elif 0 < time_left.total_seconds() <= 86400:  # 24 hours
+                    # Due within 1 day
+                    if not task.get('reminded_24h'):
+                        hours_left = int(time_left.total_seconds() / 3600)
+                        embed = discord.Embed(
+                            title="⏰ Due Soon!",
+                            description=
+                            f"Task `#{task_id}` due in {hours_left} hours!",
+                            color=COLORS["warning"])
+                        await channel.send(f"{member.mention}", embed=embed)
+                        task['reminded_24h'] = True
+
+            except Exception as e:
+                print(f"Error processing task {task_id}: {e}")
 
 
 # 5. Weekly Summary
@@ -2023,6 +2705,54 @@ async def export_logs(ctx):
     await ctx.message.add_reaction("✅")
 
 
+@bot.command(name="viewcomments",
+             help="View comments on a task: !viewcomments <task ID>")
+async def view_comments(ctx, task_id: int):
+    # Check if task exists in the system
+    task_exists = any(task_id in tasks
+                      for tasks in bot.task_assignments.values())
+
+    if not task_exists:
+        embed = create_error_embed("Not Found",
+                                   "Task ID not found in the system.")
+        return await ctx.send(embed=embed)
+
+# Load comments
+    comments = load_comments()
+    task_comments = comments.get(str(task_id), [])
+
+    if not task_comments:
+        embed = create_info_embed("No Comments",
+                                  f"No comments found for task #{task_id}.")
+        return await ctx.send(embed=embed)
+
+# Create paginated embed
+    embed = discord.Embed(title=f"📝 Comments for Task #{task_id}",
+                          color=COLORS["primary"])
+
+    # Add up to 5 comments per embed (Discord limit)
+    for comment in task_comments[:5]:
+        timestamp = datetime.fromisoformat(
+            comment["timestamp"]).strftime("%b %d, %Y %I:%M %p")
+        embed.add_field(name=f"{comment['author_name']} on {timestamp}",
+                        value=comment["comment"],
+                        inline=False)
+
+# Add footer with total comment count
+    embed.set_footer(
+        text=
+        f"Showing {len(task_comments[:5])} of {len(task_comments)} comments")
+
+    # If more than 5 comments, add navigation buttons
+    if len(task_comments) > 5:
+        embed.set_footer(
+            text=
+            f"Showing first 5 of {len(task_comments)} comments - More comments available"
+        )
+
+    await ctx.send(embed=embed)
+
+
 # 9. Task Priority Visualization
 @bot.command(name="taskchart", help="Visualize your tasks by priority")
 async def task_chart(ctx):
@@ -2050,6 +2780,7 @@ async def task_chart(ctx):
                           color=COLORS["primary"])
     embed.set_footer(text=f"Total tasks: {len(user_tasks)}")
     await ctx.send(embed=embed)
+    await update_task_channel()
 
 
 # 10. Task Reminder Configuration
@@ -2058,7 +2789,7 @@ async def task_reminders(ctx, frequency: str = None):
     if not frequency:
         # Show current settings
         embed = create_info_embed(
-            "Task Reminders", "Current reminder settings: Daily at 6PM UTC\n"
+            "Task Reminders", "Current reminder settings: Daily at 6PM EST\n"
             "Usage: `!taskreminders <off/daily/weekly>`")
         return await ctx.send(embed=embed)
 
@@ -2071,17 +2802,18 @@ async def task_reminders(ctx, frequency: str = None):
         # Enable daily reminders
         embed = create_success_embed(
             "Daily Reminders",
-            "You'll receive daily task reminders at 6PM UTC.")
+            "You'll receive daily task reminders at 6PM EST.")
     elif frequency == "weekly":
         # Enable weekly reminders
         embed = create_success_embed(
             "Weekly Reminders",
-            "You'll receive weekly task reminders on Mondays at 10AM UTC.")
+            "You'll receive weekly task reminders on Mondays at 10AM EST.")
     else:
         embed = create_error_embed("Invalid Option",
                                    "Please use: off, daily, or weekly")
 
     await ctx.send(embed=embed)
+    await update_task_channel()
 
     # ========== Startup ==========
 
@@ -2094,6 +2826,12 @@ if __name__ == "__main__":
     except (FileNotFoundError, json.JSONDecodeError):
         bot.user_scores = {}
 
-keep_alive()
-bot.run(TOKEN)
+    try:
+        keep_alive()
+        bot.run(TOKEN)
+    except KeyboardInterrupt:
+        print("\nBot shutting down...")
+    except Exception as e:
+        print(f"Error starting bot: {e}")
+
 
