@@ -1305,6 +1305,114 @@ async def custom_help(ctx, command_name: str = None):
             await ctx.send("⚠️ Couldn't DM you admin commands",
                            delete_after=10)
 
+@bot.command(name="tasks", help="Show your tasks (admins can check others)")
+@commands.guild_only()
+async def show_user_tasks(ctx, member: discord.Member = None):
+    """
+    Usage: 
+    - !tasks (shows your tasks)
+    - !tasks @User (admin only - shows another user's tasks)
+    """
+    # Non-admin users can only check themselves
+    if member and not is_admin()(ctx):
+        await ctx.send("❌ Only admins can check other users' tasks!", delete_after=10)
+        try:
+            await ctx.message.delete()
+        except:
+            pass
+        return
+
+    target_member = member or ctx.author
+    user_id = str(target_member.id)
+    
+    if user_id not in bot.task_assignments or not bot.task_assignments[user_id]:
+        embed = discord.Embed(
+            description=f"{target_member.mention} has no tasks assigned!",
+            color=COLORS["info"]
+        )
+        return await ctx.send(embed=embed)
+
+    now = datetime.now(EST)
+    pending_tasks = []
+    completed_tasks = []
+    overdue_tasks = []
+
+    # Categorize tasks
+    for task_id, task in bot.task_assignments[user_id].items():
+        due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST) if task.get("due_date") else None
+        
+        if task.get("status") == "Completed":
+            completed_tasks.append((task_id, task))
+        elif due_date and due_date < now:
+            overdue_tasks.append((task_id, task))
+        else:
+            pending_tasks.append((task_id, task))
+
+    # Create embeds for each category
+    embeds = []
+    
+    # Pending Tasks Embed (Blue)
+    if pending_tasks:
+        embed = discord.Embed(
+            title=f"📝 Pending Tasks ({len(pending_tasks)})",
+            color=COLORS["info"]
+        )
+        for task_id, task in pending_tasks:
+            due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST) if task.get("due_date") else None
+            embed.add_field(
+                name=f"Task #{task_id} | {task.get('priority', 'Normal').title()}",
+                value=(
+                    f"**{task.get('description', 'Untitled')}**\n"
+                    f"⏰ Due: {due_date.strftime('%b %d, %H:%M') if due_date else 'No deadline'}\n"
+                    f"🔮 Priority: {task.get('priority', 'Normal').title()}"
+                ),
+                inline=False
+            )
+        embeds.append(embed)
+
+    # Completed Tasks Embed (Green)
+    if completed_tasks:
+        embed = discord.Embed(
+            title=f"✅ Completed Tasks ({len(completed_tasks)})",
+            color=COLORS["success"]
+        )
+        for task_id, task in completed_tasks:
+            embed.add_field(
+                name=f"Task #{task_id}",
+                value=f"~~{task.get('description', 'Untitled')}~~",
+                inline=False
+            )
+        embeds.append(embed)
+
+    # Overdue Tasks Embed (Red)
+    if overdue_tasks:
+        embed = discord.Embed(
+            title=f"🚨 Overdue Tasks ({len(overdue_tasks)})",
+            color=COLORS["error"]
+        )
+        for task_id, task in overdue_tasks:
+            due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST)
+            embed.add_field(
+                name=f"Task #{task_id} | {task.get('priority', 'Normal').title()}",
+                value=(
+                    f"**{task.get('description', 'Untitled')}**\n"
+                    f"⏰ Was due: {due_date.strftime('%b %d, %H:%M')}\n"
+                    f"🔮 Priority: {task.get('priority', 'Normal').title()}"
+                ),
+                inline=False
+            )
+        embeds.append(embed)
+
+    # Send all embeds
+    if not embeds:
+        await ctx.send(f"{target_member.mention} has no tasks!")
+        return
+
+    await ctx.send(f"Task summary for {target_member.mention}:")
+    for embed in embeds:
+        await ctx.send(embed=embed)
+
+
 @bot.command(name="testreminder")
 @is_admin()
 async def testreminder(ctx, task_id: int):
