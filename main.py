@@ -1493,7 +1493,7 @@ async def testreminder(ctx, task_id: int):
         color=COLORS["info"]
     )
     await ctx.send(embed=embed)
-
+    
 @bot.command(name="leaderboard",
              aliases=["lb"],
              help="Show the current leaderboard")
@@ -1536,13 +1536,16 @@ async def leaderboard(ctx):
     await ctx.send(embed=embed)
 
 
+
 @bot.command(name="adjustpoints",
              help="Add or remove points from a user (Admin only)")
 @is_admin()
-async def adjust_points(ctx, member: discord.Member, action: str, amount: int):
+async def adjust_points(ctx, member: discord.Member, action: str, amount: int, *, task: str = "general"):
     """
-    !adjustpoints @user add 50
-    !adjustpoints @user remove 30
+    !adjustpoints @user add 50 [task_name]
+    !adjustpoints @user remove 30 [task_name]
+
+    If task_name is not given, defaults to "general".
     """
     action = action.lower()
 
@@ -1560,29 +1563,40 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int):
         scores = {}
 
     user_id_str = str(member.id)
-    current_score = scores.get(user_id_str, {}).get("score", 0)
+
+    # Make sure user has a dict for tasks
+    if user_id_str not in scores or not isinstance(scores[user_id_str], dict):
+        scores[user_id_str] = {}
+
+    current_task_score = scores[user_id_str].get(task, 0)
 
     if action == "add":
-        new_score = current_score + amount
+        new_task_score = current_task_score + amount
         action_word = "added to"
     else:
-        new_score = max(0, current_score - amount)  # Prevent negative scores
+        new_task_score = max(0, current_task_score - amount)
         action_word = "removed from"
 
-    # Update scores (now using dict with "score" key)
-    scores[user_id_str] = {"score": new_score}
+    # Update the task score
+    scores[user_id_str][task] = new_task_score
+
+    # Save back
     with open("scores.json", "w") as f:
         json.dump(scores, f, indent=2)
 
     # Update in-memory scores if needed
     if hasattr(bot, 'user_scores'):
-        bot.user_scores[user_id_str] = new_score
+        bot.user_scores[user_id_str] = scores[user_id_str]
+
+    # Calculate total points
+    total_points = sum(scores[user_id_str].values())
 
     embed = discord.Embed(
         title="✅ Points Adjusted",
-        description=f"{amount} points {action_word} {member.mention}",
+        description=f"{amount} points {action_word} {member.mention} for task '{task}'",
         color=COLORS["success"])
-    embed.add_field(name="New Score", value=f"{new_score} points")
+    embed.add_field(name="New Task Score", value=f"{new_task_score} points")
+    embed.add_field(name="Total Score", value=f"{total_points} points")
     embed.set_footer(text=f"Adjusted by {ctx.author.display_name}")
 
     await ctx.send(embed=embed)
