@@ -1711,7 +1711,7 @@ async def assign_task(ctx, member: discord.Member, task_id: int):
 
     # Remove from user_tasks_created since it's now assigned
     if creator_id_to_remove_from is not None:
-        del bot.user_tasks_created[creator_id_to_remove_from][task_id]
+        pass
         # If user has no more tasks, remove the key completely
         if not bot.user_tasks_created[creator_id_to_remove_from]:
             del bot.user_tasks_created[creator_id_to_remove_from]
@@ -2296,12 +2296,14 @@ async def remove_task(ctx, *, args: str = None):
 
         # Case 3: @user and task ID
         if member and task_id is not None:
-            target_id = str(member.id)
+            target_id = member.id 
             if target_id not in bot.task_assignments or task_id not in bot.task_assignments[target_id]:
                 await ctx.send(f"📭 Task ID {task_id} not found for {member.display_name}.")
                 return
 
             del bot.task_assignments[target_id][task_id]
+            if not bot.task_assignments[target_id]:
+                del bot.task_assignments[target_id]
             save_tasks(bot.task_assignments)
             await ctx.send(f"✅ Removed task {task_id} for {member.display_name}.")
             await update_task_channel()
