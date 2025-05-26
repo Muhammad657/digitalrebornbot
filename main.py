@@ -816,7 +816,7 @@ def create_info_embed(title: str, description: str) -> discord.Embed:
 
 
 # ========== Scheduled Tasks ==========
-@tasks.loop(time=time(18, 0))  # 6 PM EST reminder to log work
+@tasks.loop(time=time(10, 20))  # 6 PM EST reminder to log work
 async def daily_log_reminder():
     channel = bot.get_channel(CHANNEL_ID)
     if channel is None:
