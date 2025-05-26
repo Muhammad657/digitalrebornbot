@@ -238,12 +238,12 @@ async def update_task_channel():
 
     comments = load_comments()
 
-    PRIORITY_COLORS = {
-        "very high": 0xFF0000,
-        "high": 0xFF4500,
-        "normal": 0xFFD700,
-        "low": 0x90EE90,
-        "very low": 0xFFFFFF
+    IMPORTANCE_COLORS = {
+        "5": 0xFF0000,  # Very High
+        "4": 0xFF4500,  # High
+        "3": 0xFFD700,  # Normal
+        "2": 0x90EE90,  # Low
+        "1": 0xFFFFFF   # Very Low
     }
 
     STATUS_EMOJIS = {
@@ -266,30 +266,22 @@ async def update_task_channel():
 
     # Now create the embeds using the current display names
     for user_id, tasks in bot.task_assignments.items():
-        if not tasks:  # Skip users with no tasks
+        if not tasks:
             continue
 
-        embed = discord.Embed(
-            title=f"📋 {display_names[user_id]}'s Tasks",
-            description=
-            f"Last updated: {datetime.now(EST).strftime('%Y-%m-%d %H:%M')}",
-            color=0x5865F2)
-
-        now = datetime.now(EST)
         for task_id, task in tasks.items():
+            now = datetime.now(EST)
             due_date = None
             days_left = None
 
             if task.get("due_date"):
                 try:
-                    due_date = datetime.fromisoformat(
-                        task["due_date"]).astimezone(EST)
+                    due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST)
                     days_left = (due_date.date() - now.date()).days
                 except (ValueError, TypeError):
                     pass
 
             status = task.get("status", "Pending")
-
             if status != "Completed" and due_date:
                 if days_left < 0:
                     status = "Overdue"
@@ -298,24 +290,35 @@ async def update_task_channel():
                 elif days_left == 1:
                     status = "Due Tomorrow"
 
-            priority = task.get("priority", "normal").lower()
+            importance = str(task.get("importance", "3"))
+            importance_title = {
+                "5": "Very High",
+                "4": "High",
+                "3": "Normal",
+                "2": "Low",
+                "1": "Very Low"
+            }.get(importance, "Normal")
+
             emoji = STATUS_EMOJIS.get(status, "📝")
-            color = PRIORITY_COLORS.get(priority, 0xFFFFFF)
+            color = IMPORTANCE_COLORS.get(importance, 0x5865F2)
+            display_name = display_names.get(user_id, f"User {user_id}")
+            priority = task.get("priority", "Normal").title()
 
-            task_line = (
-                f"{emoji} `#{task_id}` **{task['description']}**\n"
-                f"▸ {status} | "
-                f"⏰ {due_date.strftime('%b %d %H:%M') if due_date else 'No deadline'} | "
-                f"🔮 {priority.title()} | "
-                f"⭐ Importance: {task.get('importance', '3')} | "
-                f"💬 {len(comments.get(str(task_id), []))} comments")
+            embed = discord.Embed(
+                title=f"📋 Task for {display_name}",
+                description=f"{emoji} `#{task_id}` **{task['description']}**",
+                color=color
+            )
 
+            embed.add_field(name="Status", value=status)
+            embed.add_field(name="Due", value=due_date.strftime('%b %d %H:%M') if due_date else "No deadline")
+            embed.add_field(name="Priority", value=priority)
+            embed.add_field(name="Importance", value=importance_title)
+            embed.add_field(name="Comments", value=f"{len(comments.get(str(task_id), []))} comments")
+            embed.set_footer(text=f"Last updated: {now.strftime('%Y-%m-%d %H:%M')}")
 
-            embed.add_field(name="\u200b", value=task_line, inline=False)
-            embed.color = color
-
-        if embed.fields:
             await channel.send(embed=embed)
+
 
 
 def load_lives():
@@ -1533,7 +1536,6 @@ async def leaderboard(ctx):
     await ctx.send(embed=embed)
 
 
-
 @bot.command(name="adjustpoints",
              help="Add or remove points from a user (Admin only)")
 @is_admin()
@@ -1557,7 +1559,8 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int):
     except (FileNotFoundError, json.JSONDecodeError):
         scores = {}
 
-    current_score = scores.get(str(member.id), 0)
+    user_id_str = str(member.id)
+    current_score = scores.get(user_id_str, {}).get("score", 0)
 
     if action == "add":
         new_score = current_score + amount
@@ -1566,14 +1569,14 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int):
         new_score = max(0, current_score - amount)  # Prevent negative scores
         action_word = "removed from"
 
-    # Update scores
-    scores[str(member.id)] = new_score
+    # Update scores (now using dict with "score" key)
+    scores[user_id_str] = {"score": new_score}
     with open("scores.json", "w") as f:
         json.dump(scores, f, indent=2)
 
     # Update in-memory scores if needed
     if hasattr(bot, 'user_scores'):
-        bot.user_scores[str(member.id)] = new_score
+        bot.user_scores[user_id_str] = new_score
 
     embed = discord.Embed(
         title="✅ Points Adjusted",
