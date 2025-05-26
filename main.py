@@ -2227,104 +2227,88 @@ async def reset_logs(ctx, *, args: str = None):
 @is_admin()
 @admin_only()
 async def remove_task(ctx, *, args: str = None):
-    """Remove tasks for a specific user, task ID, or combination of both."""
+    """Remove tasks for a specific user, task ID, or both."""
     if not args:
         embed = discord.Embed(
             title="❌ Invalid Usage",
-            description=
-            "You must specify at least a user or task ID.\nExamples:\n"
-            "• `!removetask @user` - Remove all tasks for a user\n"
-            "• `!removetask 123` - Remove task with ID 123\n"
-            "• `!removetask @user 123` - Remove task 123 for specific user",
-            color=COLORS["error"])
+            description="You must specify at least a user or task ID.\nExamples:\n"
+                        "• `!removetask @user` - Remove all tasks for a user\n"
+                        "• `!removetask 123` - Remove task with ID 123\n"
+                        "• `!removetask @user 123` - Remove task 123 for that user",
+            color=COLORS["error"]
+        )
         await ctx.send(embed=embed)
         return
 
     try:
-        # Initialize variables
         member = None
         task_id = None
 
-        # Check if the input contains a user mention
+        # Extract mentioned user
         if ctx.message.mentions:
             member = ctx.message.mentions[0]
-            # Get the remaining part of the argument after mention
-            task_part = args.replace(member.mention, "").strip()
-        else:
-            task_part = args.strip()
+            args = args.replace(member.mention, "").strip()
 
-        # Try to parse task ID if there's a remaining part
-        if task_part:
+        # Extract task ID
+        if args:
             try:
-                task_id = int(task_part)
+                task_id = int(args.split()[0])
             except ValueError:
-                await ctx.send("❌ Task ID must be a number")
+                await ctx.send("❌ Task ID must be a number.")
                 return
 
-        # Case 1: Remove all tasks for a specific user
-        if member and not task_id:
+        # Case 1: @user only
+        if member and task_id is None:
             target_id = str(member.id)
-            if target_id not in bot.task_assignments or not bot.task_assignments[
-                    target_id]:
+            if target_id not in bot.task_assignments or not bot.task_assignments[target_id]:
                 await ctx.send(f"📭 No tasks found for {member.display_name}.")
                 return
 
             count = len(bot.task_assignments[target_id])
             del bot.task_assignments[target_id]
             save_tasks(bot.task_assignments)
-            await ctx.send(
-                f"✅ Removed all {count} tasks for {member.display_name}.")
+            await ctx.send(f"✅ Removed all {count} tasks for {member.display_name}.")
             await update_task_channel()
-            return  # <-- THIS IS CRUCIAL
+            return
 
-        # Case 2: Remove specific task for specific user
-        elif member and task_id:
+        # Case 2: task ID only
+        if task_id is not None and member is None:
+            found = False
+            for user_id, tasks in bot.task_assignments.items():
+                if task_id in tasks:
+                    del tasks[task_id]
+                    member = await bot.fetch_user(int(user_id))
+                    found = True
+                    break
+            if found:
+                save_tasks(bot.task_assignments)
+                await ctx.send(f"✅ Removed task {task_id} (assigned to {member.display_name}).")
+                await update_task_channel()
+            else:
+                await ctx.send(f"📭 Task ID {task_id} not found.")
+            return
+
+        # Case 3: @user and task ID
+        if member and task_id is not None:
             target_id = str(member.id)
-            if target_id not in bot.task_assignments:
-                await ctx.send(f"📭 No tasks found for {member.display_name}.")
-                return
-
-            if task_id not in bot.task_assignments[target_id]:
-                await ctx.send(
-                    f"📭 Task {task_id} not found for {member.display_name}.")
+            if target_id not in bot.task_assignments or task_id not in bot.task_assignments[target_id]:
+                await ctx.send(f"📭 Task ID {task_id} not found for {member.display_name}.")
                 return
 
             del bot.task_assignments[target_id][task_id]
             save_tasks(bot.task_assignments)
-            await ctx.send(
-                f"✅ Removed task {task_id} for {member.display_name}.")
+            await ctx.send(f"✅ Removed task {task_id} for {member.display_name}.")
             await update_task_channel()
-            return  # <-- THIS IS CRUCIAL
+            return
 
-        # Case 3: Remove task by ID (search all users)
-        elif task_id and not member:
-            removed = False
-            for user_id, tasks in list(bot.task_assignments.items()):
-                if task_id in tasks:
-                    del tasks[task_id]
-                    removed = True
-                    member = await bot.fetch_user(int(user_id))
-                    break
-
-            if removed:
-                save_tasks(bot.task_assignments)
-                await ctx.send(
-                    f"✅ Removed task {task_id} (was assigned to {member.display_name})."
-                )
-                await update_task_channel()
-                return  # <-- THIS IS CRUCIAL
-            else:
-                await ctx.send(f"📭 Task {task_id} not found.")
-                return
-
-        # If we get here, no valid case was matched
-        await ctx.send(
-            "❌ Invalid command usage. See !help removetask for examples.")
+        await ctx.send("❌ Invalid command usage. Try `!help removetask`.")
 
     except Exception as e:
-        error_embed = discord.Embed(title="❌ Error Removing Task",
-                                    description=f"An error occurred: {str(e)}",
-                                    color=COLORS["error"])
+        error_embed = discord.Embed(
+            title="❌ Error Removing Task",
+            description=f"An error occurred: {str(e)}",
+            color=COLORS["error"]
+        )
         await ctx.send(embed=error_embed)
 
 
