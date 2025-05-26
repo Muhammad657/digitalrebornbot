@@ -1350,7 +1350,7 @@ async def show_user_tasks(ctx, member: discord.Member = None, *args):
         await ctx.send("❌ Invalid sort! Use: due or priority.", delete_after=10)
         return
 
-    user_id = str(target_member.id)
+    user_id = target_member.id
     if user_id not in bot.task_assignments or not bot.task_assignments[user_id]:
         await ctx.send(f"{target_member.mention} has no tasks.")
         return
