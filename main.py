@@ -971,63 +971,68 @@ def admin_only():
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
+    
+    # --- Load Data ---
     try:
         with open("scores.json", "r") as f:
             bot.user_scores = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         bot.user_scores = {}
 
-    # Initialize your bot components here
-    migrate_logs()
-
-    # Load lives data
+    migrate_logs()  # Legacy migration (if needed)
     bot.user_lives = load_lives()
+    bot.add_view(LogButton())  # Persistent buttons
 
-    # Register persistent view
-    bot.add_view(LogButton())
-
-    # Initialize task tracking
+    # --- Task Initialization ---
     bot.task_assignments = load_tasks()
     bot.user_tasks_created = {}
     bot.comments = load_comments()
 
-    # Load existing task counter
-    if bot.task_assignments:
-        max_id = max(
-            max(map(int, user_tasks.keys()))
-            for user_tasks in bot.task_assignments.values() if user_tasks)
-        bot.task_counter = max_id
+    # Debug: Print loaded tasks to verify due dates
+    print(f"\n[Task Debug] Loaded {len(bot.task_assignments)} users with tasks:")
+    for user_id, tasks in bot.task_assignments.items():
+        print(f"  User {user_id}: {len(tasks)} tasks")
+        for task_id, task in tasks.items():
+            if "due_date" in task:
+                print(f"    Task {task_id} → Due: {task['due_date']}")
 
-    # FIRST - Update the task board
+    # Set task counter
+    if bot.task_assignments:
+        bot.task_counter = max(
+            max(map(int, user_tasks.keys()))
+            for user_tasks in bot.task_assignments.values() if user_tasks
+        )
+
+    # --- START LOOPS FIRST (to prevent missing reminders) ---
+    background_tasks = [
+        daily_log_reminder,
+        send_summary_to_admin,
+        evening_ping_task,
+        check_overdue_tasks,
+        daily_reset_responders,
+        check_due_dates,  # MOST CRITICAL FOR REMINDERS
+        weekly_summary
+    ]
+
+    for task in background_tasks:
+        if not task.is_running():
+            task.start()
+            print(f"Started {task.__name__} loop")
+
+    # --- THEN Cleanup/Update ---
     await cleanup_task_assignments()
     await update_task_channel()
 
-    # THEN - Start background tasks
-    if not daily_log_reminder.is_running():
-        daily_log_reminder.start()
-    if not send_summary_to_admin.is_running():
-        send_summary_to_admin.start()
-    if not evening_ping_task.is_running():
-        evening_ping_task.start()
-    if not check_overdue_tasks.is_running():
-        check_overdue_tasks.start()
-    if not daily_reset_responders.is_running():
-        daily_reset_responders.start()
-    if not check_due_dates.is_running():
-        check_due_dates.start()
-    if not weekly_summary.is_running():
-        weekly_summary.start()
-
-    print("Normalizing task storage...")
-    normalized_assignments = {}
-    for user_id, tasks in bot.task_assignments.items():
-        # Convert all user IDs to strings
-        normalized_assignments[str(user_id)] = tasks
-
-    bot.task_assignments = normalized_assignments
+    # --- Normalize Task Storage ---
+    print("\nNormalizing task storage...")
+    bot.task_assignments = {
+        str(user_id): tasks 
+        for user_id, tasks in bot.task_assignments.items()
+    }
     save_tasks(bot.task_assignments)
-    print("Task storage normalized")
+    print(f"Normalized {len(bot.task_assignments)} users' tasks")
 
+    print("\nBot fully initialized! ✅")
 
 @bot.event
 async def on_raw_reaction_add(payload):
@@ -2423,12 +2428,12 @@ async def add_category(ctx, task_id: int, *, category: str):
     await ctx.send(embed=embed)
     await update_task_channel()
 
-@tasks.loop(hours=1)  # Check every hour
+@tasks.loop(hours=1)  # Checks every hour (but we'll filter for 2-hour reminders)
 async def check_due_dates():
     now = datetime.now(EST)
     current_time = now.time()
     
-    # Skip between midnight and 5 AM
+    # Skip midnight-5 AM (optional)
     if time(0, 0) <= current_time < time(5, 0):
         return
         
@@ -2444,52 +2449,40 @@ async def check_due_dates():
             try:
                 due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST)
                 time_left = due_date - now
+                total_hours_left = time_left.total_seconds() / 3600
 
-                # Exact time reminder (within 1 hour window)
-                if 0 < time_left.total_seconds() <= 3600 and not task.get('reminded_exact'):
+                # --- 24-Hour Early Warning ---
+                if (23 <= total_hours_left <= 24) and not task.get('reminded_24h'):
                     embed = discord.Embed(
-                        title="⏰ Task Due Soon!",
-                        description=f"Task `#{task_id}` is due at {due_date.strftime('%H:%M')}!",
-                        color=COLORS["warning"])
-                    await channel.send(f"{member.mention}", embed=embed)
-                    task['reminded_exact'] = True
-
-                # Overdue alert
-                elif time_left.total_seconds() <= 0:
-                    if not task.get('reminded_overdue'):
-                        embed = discord.Embed(
-                            title="🚨 Task Overdue!",
-                            description=f"Task `#{task_id}` is now overdue!",
-                            color=COLORS["error"])
-                        await channel.send(f"{member.mention}", embed=embed)
-                        task['reminded_overdue'] = True
-
-                # Due today morning reminder (8 AM-10 AM window)
-                elif (due_date.date() == now.date() and 
-                      time(8, 0) <= current_time < time(10, 0) and
-                      not task.get('reminded_today')):
-                    hours_left = int(time_left.total_seconds() / 3600)
-                    embed = discord.Embed(
-                        title="⚠️ Due Today!",
-                        description=f"Task `#{task_id}` is due in {hours_left} hours!",
-                        color=COLORS["warning"])
-                    await channel.send(f"{member.mention}", embed=embed)
-                    task['reminded_today'] = True
-
-                # Tomorrow reminder (8 AM-10 AM window)
-                elif (due_date.date() == (now.date() + timedelta(days=1)) and
-                      time(8, 0) <= current_time < time(10, 0) and
-                      not task.get('reminded_tomorrow')):
-                    embed = discord.Embed(
-                        title="🔔 Due Tomorrow!",
-                        description=f"Task `#{task_id}` is due tomorrow at {due_date.strftime('%H:%M')}",
+                        title="🔔 Task Due in 24 Hours!",
+                        description=f"Task `#{task_id}` is due **24 hours from now** at {due_date.strftime('%m/%d %H:%M')}!",
                         color=COLORS["info"])
                     await channel.send(f"{member.mention}", embed=embed)
-                    task['reminded_tomorrow'] = True
-                          
-            except Exception as e:
-                print(f"Error processing task {task_id}: {e}")
+                    task['reminded_24h'] = True
 
+                # --- 2-Hourly Reminders (within 24h) ---
+                elif (0 < total_hours_left <= 24 and 
+                      int(now.timestamp() / 3600) % 2 == 0 and  # Runs every 2 hours
+                      not task.get(f'reminded_{int(total_hours_left)}h')):
+                    embed = discord.Embed(
+                        title="⏰ Task Due Soon!",
+                        description=f"Task `#{task_id}` is due in **{int(total_hours_left)} hours** ({due_date.strftime('%m/%d %H:%M')})!",
+                        color=COLORS["warning"])
+                    await channel.send(f"{member.mention}", embed=embed)
+                    task[f'reminded_{int(total_hours_left)}h'] = True
+
+                # --- Overdue Alert ---
+                elif total_hours_left <= 0 and not task.get('reminded_overdue'):
+                    embed = discord.Embed(
+                        title="🚨 Task Overdue!",
+                        description=f"Task `#{task_id}` is now overdue!",
+                        color=COLORS["error"])
+                    await channel.send(f"{member.mention}", embed=embed)
+                    task['reminded_overdue'] = True
+
+            except Exception as e:
+                print(f"Error in task {task_id}: {e}")
+                
 # 5. Weekly Summary
 @tasks.loop(time=time(18, 0))  # Runs at midnight on Sunday
 async def weekly_summary():
