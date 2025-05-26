@@ -2436,6 +2436,7 @@ async def check_due_dates():
         f"⚠️ TEST REMINDER at {now}. " 
         f"Next check: {now + timedelta(hours=1)}"
     )
+    print(f"[DEBUG] Running due date check at {now}")
 
 
 # @tasks.loop(hours=1)  # Checks every hour (but we'll filter for 2-hour reminders)
