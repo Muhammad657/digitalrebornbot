@@ -15,6 +15,21 @@ from dotenv import load_dotenv
 import asyncio
 from typing import Dict, List, Set, Any, Optional
 from discord.ui import View, Button
+from flask import Flask
+import threading
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is alive!"
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = threading.Thread(target=run)
+    t.start()
 # ========== Setup ==========
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -2079,5 +2094,6 @@ if __name__ == "__main__":
     except (FileNotFoundError, json.JSONDecodeError):
         bot.user_scores = {}
 
+keep_alive()
 bot.run(TOKEN)
 
