@@ -823,7 +823,7 @@ async def daily_log_reminder():
     now_est = datetime.now(EST)
 
     # Check if it's 6:00 PM EST
-    if now_est.hour == 10 and now_est.minute == 45:
+    if now_est.hour == 14 and now_est.minute == 00:
         channel = bot.get_channel(CHANNEL_ID)
         if channel is None:
             return
