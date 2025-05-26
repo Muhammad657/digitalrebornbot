@@ -1289,6 +1289,26 @@ async def custom_help(ctx, command_name: str = None):
             await ctx.send("⚠️ Couldn't DM you admin commands",
                            delete_after=10)
 
+@bot.command(name="testreminder")
+@is_admin()
+async def testreminder(ctx, task_id: int):
+    """Force a reminder for testing"""
+    task = None
+    for user_tasks in bot.task_assignments.values():
+        if task_id in user_tasks:
+            task = user_tasks[task_id]
+            break
+            
+    if not task:
+        return await ctx.send("Task not found")
+        
+    # Force a reminder
+    embed = discord.Embed(
+        title="🔔 TEST REMINDER",
+        description=f"Test reminder for task {task_id}: {task['description']}",
+        color=COLORS["info"]
+    )
+    await ctx.send(embed=embed)
 
 @bot.command(name="leaderboard",
              aliases=["lb"],
