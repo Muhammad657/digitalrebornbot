@@ -208,6 +208,10 @@ async def cleanup_task_assignments():
     save_tasks(bot.task_assignments)
 
 
+def save_created_tasks(data):
+    with open("created_tasks.json", "w") as f:
+        json.dump(data, f, indent=4)
+
 async def update_task_channel():
     channel = bot.get_channel(TASK_CHANNEL_ID)
 
