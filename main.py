@@ -1304,113 +1304,149 @@ async def custom_help(ctx, command_name: str = None):
         except discord.Forbidden:
             await ctx.send("⚠️ Couldn't DM you admin commands",
                            delete_after=10)
-
 @bot.command(name="tasks", help="Show your tasks (admins can check others)")
 @commands.guild_only()
-async def show_user_tasks(ctx, member: discord.Member = None):
+async def show_user_tasks(ctx, member: discord.Member = None, *args):
     """
-    Usage: 
-    - !tasks (shows your tasks)
-    - !tasks @User (admin only - shows another user's tasks)
+    Usage:
+    - !tasks
+    - !tasks @User
+    - !tasks @User pending
+    - !tasks @User all priority
+    - !tasks overdue due
     """
-    # Non-admin users can only check themselves
-    if member and not is_admin()(ctx):
-        await ctx.send("❌ Only admins can check other users' tasks!", delete_after=10)
-        try:
-            await ctx.message.delete()
-        except:
-            pass
+
+    # Admins can view others' tasks, regular users can only view their own
+    filter_options = {"pending", "completed", "overdue", "all"}
+    sort_options = {"due", "priority"}
+
+    # Determine target user and args
+    target_member = ctx.author
+    filter_arg = None
+    sort_arg = None
+
+    if member and isinstance(member, discord.Member):
+        if not is_admin()(ctx) and member != ctx.author:
+            await ctx.send("❌ Only admins can view other users' tasks!", delete_after=10)
+            return
+        target_member = member
+        if args:
+            filter_arg = args[0].lower()
+        if len(args) > 1:
+            sort_arg = args[1].lower()
+    else:
+        if isinstance(member, str):
+            args = (member,) + args  # shift args
+        if args:
+            filter_arg = args[0].lower()
+        if len(args) > 1:
+            sort_arg = args[1].lower()
+
+    if filter_arg not in filter_options and filter_arg is not None:
+        await ctx.send("❌ Invalid filter! Use: pending, completed, overdue, or all.", delete_after=10)
         return
 
-    target_member = member or ctx.author
+    if sort_arg not in sort_options and sort_arg is not None:
+        await ctx.send("❌ Invalid sort! Use: due or priority.", delete_after=10)
+        return
+
     user_id = str(target_member.id)
-    
     if user_id not in bot.task_assignments or not bot.task_assignments[user_id]:
-        embed = discord.Embed(
-            description=f"{target_member.mention} has no tasks assigned!",
-            color=COLORS["info"]
-        )
-        return await ctx.send(embed=embed)
+        await ctx.send(f"{target_member.mention} has no tasks.")
+        return
 
     now = datetime.now(EST)
     pending_tasks = []
     completed_tasks = []
     overdue_tasks = []
 
-    # Categorize tasks
     for task_id, task in bot.task_assignments[user_id].items():
-        due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST) if task.get("due_date") else None
-        
-        if task.get("status") == "Completed":
-            completed_tasks.append((task_id, task))
-        elif due_date and due_date < now:
-            overdue_tasks.append((task_id, task))
-        else:
-            pending_tasks.append((task_id, task))
+        status = task.get("status", "Pending")
+        due_date = None
+        if "due_date" in task and task["due_date"]:
+            try:
+                due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST)
+            except ValueError:
+                due_date = None
 
-    # Create embeds for each category
+        task_data = (task_id, task, due_date)
+
+        if status == "Completed":
+            completed_tasks.append(task_data)
+        elif status == "Pending":
+            if due_date and due_date < now:
+                overdue_tasks.append(task_data)
+            else:
+                pending_tasks.append(task_data)
+
+    # Combine tasks based on filter
+    task_sections = []
+
+    if filter_arg in (None, "all"):
+        task_sections = [
+            ("📝 Pending Tasks", COLORS["info"], pending_tasks),
+            ("✅ Completed Tasks", COLORS["success"], completed_tasks),
+            ("🚨 Overdue Tasks", COLORS["error"], overdue_tasks),
+        ]
+    else:
+        filter_map = {
+            "pending": ("📝 Pending Tasks", COLORS["info"], pending_tasks),
+            "completed": ("✅ Completed Tasks", COLORS["success"], completed_tasks),
+            "overdue": ("🚨 Overdue Tasks", COLORS["error"], overdue_tasks),
+        }
+        task_sections = [filter_map[filter_arg]]
+
+    # Apply sorting
+    def sort_key_due(task_data):
+        _, _, due = task_data
+        return due or datetime.max
+
+    def sort_key_priority(task_data):
+        priority_order = {"high": 0, "normal": 1, "low": 2}
+        return priority_order.get(task_data[1].get("priority", "Normal").lower(), 1)
+
+    if sort_arg == "due":
+        for i in range(len(task_sections)):
+            task_sections[i] = (
+                task_sections[i][0],  # Title
+                task_sections[i][1],  # Color
+                sorted(task_sections[i][2], key=sort_key_due)
+            )
+    elif sort_arg == "priority":
+        for i in range(len(task_sections)):
+            task_sections[i] = (
+                task_sections[i][0],
+                task_sections[i][1],
+                sorted(task_sections[i][2], key=sort_key_priority)
+            )
+
+    # Build and send embeds
     embeds = []
-    
-    # Pending Tasks Embed (Blue)
-    if pending_tasks:
-        embed = discord.Embed(
-            title=f"📝 Pending Tasks ({len(pending_tasks)})",
-            color=COLORS["info"]
-        )
-        for task_id, task in pending_tasks:
-            due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST) if task.get("due_date") else None
-            embed.add_field(
-                name=f"Task #{task_id} | {task.get('priority', 'Normal').title()}",
-                value=(
-                    f"**{task.get('description', 'Untitled')}**\n"
-                    f"⏰ Due: {due_date.strftime('%b %d, %H:%M') if due_date else 'No deadline'}\n"
-                    f"🔮 Priority: {task.get('priority', 'Normal').title()}"
-                ),
-                inline=False
-            )
+    for title, color, task_list in task_sections:
+        if not task_list:
+            continue
+        embed = discord.Embed(title=f"{title} ({len(task_list)})", color=color)
+        for task_id, task, due_date in task_list:
+            desc = task.get("description", "Untitled")
+            priority = task.get("priority", "Normal").title()
+            due_str = due_date.strftime('%b %d, %H:%M') if due_date else 'No deadline'
+            if title.startswith("✅"):
+                value = f"~~{desc}~~"
+            else:
+                value = (
+                    f"**{desc}**\n"
+                    f"⏰ Due: {due_str}\n"
+                    f"🔮 Priority: {priority}"
+                )
+            embed.add_field(name=f"Task #{task_id}", value=value, inline=False)
         embeds.append(embed)
 
-    # Completed Tasks Embed (Green)
-    if completed_tasks:
-        embed = discord.Embed(
-            title=f"✅ Completed Tasks ({len(completed_tasks)})",
-            color=COLORS["success"]
-        )
-        for task_id, task in completed_tasks:
-            embed.add_field(
-                name=f"Task #{task_id}",
-                value=f"~~{task.get('description', 'Untitled')}~~",
-                inline=False
-            )
-        embeds.append(embed)
-
-    # Overdue Tasks Embed (Red)
-    if overdue_tasks:
-        embed = discord.Embed(
-            title=f"🚨 Overdue Tasks ({len(overdue_tasks)})",
-            color=COLORS["error"]
-        )
-        for task_id, task in overdue_tasks:
-            due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST)
-            embed.add_field(
-                name=f"Task #{task_id} | {task.get('priority', 'Normal').title()}",
-                value=(
-                    f"**{task.get('description', 'Untitled')}**\n"
-                    f"⏰ Was due: {due_date.strftime('%b %d, %H:%M')}\n"
-                    f"🔮 Priority: {task.get('priority', 'Normal').title()}"
-                ),
-                inline=False
-            )
-        embeds.append(embed)
-
-    # Send all embeds
     if not embeds:
-        await ctx.send(f"{target_member.mention} has no tasks!")
-        return
-
-    await ctx.send(f"Task summary for {target_member.mention}:")
-    for embed in embeds:
-        await ctx.send(embed=embed)
+        await ctx.send(f"{target_member.mention} has no tasks matching that filter.")
+    else:
+        await ctx.send(f"📋 Task summary for {target_member.mention}:")
+        for embed in embeds:
+            await ctx.send(embed=embed)
 
 
 @bot.command(name="testreminder")
