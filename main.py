@@ -1796,6 +1796,7 @@ async def complete_task(ctx, task_id: int):
         f"Task #{task_id} marked as completed!\n+{points} points! Your total score: {bot.user_scores[str(ctx.author.id)]}"
     )
     await ctx.send(embed=embed)
+    await update_task_channel()
 
 
 @bot.command(name="createtask", help="Create a new task using a form")
