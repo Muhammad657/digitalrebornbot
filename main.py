@@ -1313,7 +1313,7 @@ async def custom_help(ctx, command_name: str = None):
                         f"`{cmd}`" for cmd in [
                             "createtask", "addtask", "mytasks", "updatetask",
                             "commenttask", "viewcomments", "searchtasks",
-                            "addcategory", "taskchart"
+                            "addcategory", "taskchart", "tasks"
                         ]
                     ]),
                     inline=False)
