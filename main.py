@@ -1017,7 +1017,7 @@ async def on_ready():
     for task in background_tasks:
         if not task.is_running():
             task.start()
-            print(f"Started {task.__name__} loop")
+            print(f"Started loop: {task}")  # if you just want to confirm it started
 
     # --- THEN Cleanup/Update ---
     await cleanup_task_assignments()
