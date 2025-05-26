@@ -1944,7 +1944,6 @@ async def assign_task(ctx, member: discord.Member, task_id: int):
     await ctx.send(embed=embed)
     await update_task_channel()  # Update task channel
 
-
 @bot.command(name="completetask", help="Mark a task as completed")
 async def complete_task(ctx, task_id: int):
     user_tasks = bot.task_assignments.get(ctx.author.id, {})
@@ -1958,18 +1957,29 @@ async def complete_task(ctx, task_id: int):
     task["completed_at"] = str(datetime.now(EST))
     points = task.get("points", 10)
 
-    # Update scores in memory AND save to disk
-    award_points(str(ctx.author.id), "Task Name Here", points)
+    # ✅ Correct task name resolution (supports both addtask & modal)
+    task_name = task.get("name") or task.get("description") or f"Task #{task_id}"
 
-    # Save to file
+    # ✅ Award points with correct task name
+    award_points(str(ctx.author.id), task_name, points)
+
+    # ✅ Save updated scores to file
     with open("scores.json", "w") as f:
         json.dump(bot.user_scores, f)
 
+    # ✅ Show user their updated score (optional: customize how it's displayed)
+    user_score = bot.user_scores[str(ctx.author.id)]
+    task_summary = "\n".join(
+        [f"• {name}: {pts} pts" for name, pts in user_score.items()]
+    )
+
     embed = create_success_embed(
-        "Task Completed",
-        f"Task #{task_id} marked as completed!\n+{points} points! Your total score: {bot.user_scores[str(ctx.author.id)]}"
+        "✅ Task Completed",
+        f"Task #{task_id} marked as completed!\n+{points} points!\n\nYour total score breakdown:\n{task_summary}"
     )
     await ctx.send(embed=embed)
+
+    # Optional: refresh task channel view if you use a public board
     await update_task_channel()
 
 
