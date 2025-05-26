@@ -818,35 +818,39 @@ def create_info_embed(title: str, description: str) -> discord.Embed:
 
 
 # ========== Scheduled Tasks ==========
-@tasks.loop(time=time(10, 20))  # 6 PM EST reminder to log work
+@tasks.loop(minutes=1)
 async def daily_log_reminder():
-    channel = bot.get_channel(CHANNEL_ID)
-    if channel is None:
-        return
+    now_est = datetime.now(EST)
 
-    today = str(datetime.now(EST).date())
-    user_logs = load_logs()
-    guild = channel.guild
-    members = [m for m in guild.members if not m.bot]
+    # Check if it's 6:00 PM EST
+    if now_est.hour == 10 and now_est.minute == 45:
+        channel = bot.get_channel(CHANNEL_ID)
+        if channel is None:
+            return
 
-    slackers = [
-        m.mention for m in members
-        if str(m.id) not in user_logs or today not in user_logs[str(m.id)]
-    ]
+        today = str(now_est.date())
+        user_logs = load_logs()
+        guild = channel.guild
+        members = [m for m in guild.members if not m.bot]
 
-    if slackers:
-        embed = discord.Embed(
-            title="🔔 Daily Log Reminder",
-            description=
-            f"These users haven't logged yet: {', '.join(slackers)}",
-            color=COLORS["warning"])
-        embed.add_field(
-            name="How to Log",
-            value=
-            "Click the button below or use `!log` to log your work. And remember, who ever doesn't log, he's getting touched by me 😈",
-            inline=False)
-        embed.set_thumbnail(url="https://i.imgur.com/7W0MJXP.png")
-        await channel.send(embed=embed, view=LogButton())
+        slackers = [
+            m.mention for m in members
+            if str(m.id) not in user_logs or today not in user_logs[str(m.id)]
+        ]
+
+        if slackers:
+            embed = discord.Embed(
+                title="🔔 Daily Log Reminder",
+                description=
+                f"These users haven't logged yet: {', '.join(slackers)}",
+                color=COLORS["warning"])
+            embed.add_field(
+                name="How to Log",
+                value=
+                "Click the button below or use `!log` to log your work. And remember, who ever doesn't log, he's getting touched by me 😈",
+                inline=False)
+            embed.set_thumbnail(url="https://i.imgur.com/7W0MJXP.png")
+            await channel.send(embed=embed, view=LogButton())
 
 
 @tasks.loop(time=time(0,
