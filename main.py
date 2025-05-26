@@ -2464,6 +2464,7 @@ async def add_category(ctx, task_id: int, *, category: str):
 #     )
 #     print(f"[DEBUG] Running due date check at {now}")
 
+from datetime import datetime, timedelta
 
 @tasks.loop(minutes=1)
 async def check_due_dates():
@@ -2476,14 +2477,22 @@ async def check_due_dates():
                 continue
 
             try:
-                due_date = EST.localize(datetime.fromisoformat(task["due_date"]))
+                due_date = datetime.fromisoformat(task["due_date"])
+                if due_date.tzinfo is None:
+                    due_date = EST.localize(due_date)
+                else:
+                    due_date = due_date.astimezone(EST)
+
                 time_left = due_date - now
                 total_hours_left = time_left.total_seconds() / 3600
 
                 print(f"[DEBUG] Now: {now} | Task #{task_id} Due: {due_date} | Hours left: {total_hours_left:.2f}")
 
-                # 24-Hour Reminder (safe trigger range)
-                if 23.9 <= total_hours_left <= 24.1 and not task.get("reminded_24h"):
+                # 24-Hour Reminder: Due between now+24h and now+24h+1min
+                target_window_start = now + timedelta(hours=24)
+                target_window_end = now + timedelta(hours=24, minutes=1)
+
+                if target_window_start <= due_date < target_window_end and not task.get("reminded_24h"):
                     embed = discord.Embed(
                         title="🔔 Task Due in 24 Hours!",
                         description=f"Task `#{task_id}` is due at {due_date.strftime('%Y-%m-%d %H:%M')}",
