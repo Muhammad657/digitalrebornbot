@@ -230,6 +230,7 @@ async def update_task_channel():
     channel = bot.get_channel(TASK_CHANNEL_ID)
 
     def is_task_board(m):
+        # Only delete messages that are task boards (not reminders)
         return (m.author == bot.user and m.embeds and any(
             embed.title.startswith("📋 ") and "Tasks" in embed.title
             for embed in m.embeds))
@@ -255,7 +256,7 @@ async def update_task_channel():
         "Due Tomorrow": "🔔"
     }
 
-    # First create a mapping of user IDs to their current display name
+    # Map user IDs to display names
     display_names = {}
     for user_id in bot.task_assignments.keys():
         try:
@@ -264,13 +265,23 @@ async def update_task_channel():
         except:
             display_names[user_id] = f"User {user_id}"
 
-    # Now create the embeds using the current display names
+    # Create one embed per user with all their tasks
     for user_id, tasks in bot.task_assignments.items():
         if not tasks:
             continue
 
+        display_name = display_names.get(user_id, f"User {user_id}")
+        now = datetime.now(EST)
+
+        embed = discord.Embed(
+            title=f"📋 {display_name}'s Tasks",
+            description=f"Last updated: {now.strftime('%Y-%m-%d %H:%M')}",
+            color=0x5865F2  # default color, will update based on last task importance
+        )
+
+        last_task_importance = "3"  # default importance (Normal)
+        
         for task_id, task in tasks.items():
-            now = datetime.now(EST)
             due_date = None
             days_left = None
 
@@ -291,6 +302,8 @@ async def update_task_channel():
                     status = "Due Tomorrow"
 
             importance = str(task.get("importance", "3"))
+            last_task_importance = importance  # keep updating, so last task importance is used for color
+
             importance_title = {
                 "5": "Very High",
                 "4": "High",
@@ -300,24 +313,23 @@ async def update_task_channel():
             }.get(importance, "Normal")
 
             emoji = STATUS_EMOJIS.get(status, "📝")
-            color = IMPORTANCE_COLORS.get(importance, 0x5865F2)
-            display_name = display_names.get(user_id, f"User {user_id}")
             priority = task.get("priority", "Normal").title()
 
-            embed = discord.Embed(
-                title=f"📋 Task for {display_name}",
-                description=f"{emoji} `#{task_id}` **{task['description']}**",
-                color=color
+            task_line = (
+                f"{emoji} `#{task_id}` **{task['description']}**\n"
+                f"▸ Status: {status} | "
+                f"Due: {due_date.strftime('%b %d %H:%M') if due_date else 'No deadline'} | "
+                f"Priority: {priority} | "
+                f"Importance: {importance_title} | "
+                f"Comments: {len(comments.get(str(task_id), []))}"
             )
 
-            embed.add_field(name="Status", value=status)
-            embed.add_field(name="Due", value=due_date.strftime('%b %d %H:%M') if due_date else "No deadline")
-            embed.add_field(name="Priority", value=priority)
-            embed.add_field(name="Importance", value=importance_title)
-            embed.add_field(name="Comments", value=f"{len(comments.get(str(task_id), []))} comments")
-            embed.set_footer(text=f"Last updated: {now.strftime('%Y-%m-%d %H:%M')}")
+            embed.add_field(name="\u200b", value=task_line, inline=False)
 
-            await channel.send(embed=embed)
+        # Set embed color based on last task importance
+        embed.color = IMPORTANCE_COLORS.get(last_task_importance, 0x5865F2)
+
+        await channel.send(embed=embed)
 
 
 
