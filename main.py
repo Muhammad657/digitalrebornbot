@@ -307,7 +307,9 @@ async def update_task_channel():
                 f"▸ {status} | "
                 f"⏰ {due_date.strftime('%b %d %H:%M') if due_date else 'No deadline'} | "
                 f"🔮 {priority.title()} | "
+                f"⭐ Importance: {task.get('importance', 3)} | "
                 f"💬 {len(comments.get(str(task_id), []))} comments")
+
 
             embed.add_field(name="\u200b", value=task_line, inline=False)
             embed.color = color
@@ -414,51 +416,62 @@ class TaskCreationModal(discord.ui.Modal, title="Create New Task"):
 
     def __init__(self):
         super().__init__()
-        self.add_item(
-            discord.ui.TextInput(label="Task Name",
-                                 placeholder="Enter task name...",
-                                 required=True,
-                                 max_length=100))
-        self.add_item(
-            discord.ui.TextInput(label="Description",
-                                 placeholder="Enter detailed description...",
-                                 style=discord.TextStyle.long,
-                                 required=True,
-                                 max_length=500))
-        self.add_item(
-            discord.ui.TextInput(label="Due Date & Time (YYYY-MM-DD HH:MM)",
-                                 placeholder="Leave blank for no due date",
-                                 required=False))
-        self.add_item(
-            discord.ui.TextInput(
-                label="Priority (very low/low/normal/high/very high)",
-                placeholder="normal",
-                required=False))
-        self.add_item(
-            discord.ui.TextInput(label="Points",
-                                 placeholder="10",
-                                 required=False))
+        self.add_item(discord.ui.TextInput(
+            label="Task Name",
+            placeholder="Enter task name...",
+            required=True,
+            max_length=100))
+        self.add_item(discord.ui.TextInput(
+            label="Description",
+            placeholder="Enter detailed description...",
+            style=discord.TextStyle.long,
+            required=True,
+            max_length=500))
+        self.add_item(discord.ui.TextInput(
+            label="Due Date & Time (YYYY-MM-DD HH:MM)",
+            placeholder="Leave blank for no due date",
+            required=False))
+        self.add_item(discord.ui.TextInput(
+            label="Priority and Importance (e.g. high|4)",
+            placeholder="normal|3",
+            required=False))
+        self.add_item(discord.ui.TextInput(
+            label="Points",
+            placeholder="10",
+            required=False))
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Parse inputs
         name = self.children[0].value
         description = f"{name}: {self.children[1].value}"
         due_datetime_str = self.children[2].value.strip()
-        priority = (self.children[3].value.strip().lower() or "normal")
+
+        priority_importance_str = self.children[3].value.strip() or "normal|3"
         points_str = self.children[4].value.strip() or "10"
 
-        # Validate priority
+        # Parse priority and importance
+        if '|' in priority_importance_str:
+            priority_part, importance_part = priority_importance_str.split('|', 1)
+        else:
+            priority_part = priority_importance_str
+            importance_part = "3"  # default importance
+
+        priority = priority_part.strip().lower()
         valid_priorities = ["very low", "low", "normal", "high", "very high"]
         if priority not in valid_priorities:
             priority = "normal"
 
-    # Validate points
+        try:
+            importance = int(importance_part.strip())
+            if not 1 <= importance <= 5:
+                importance = 3
+        except ValueError:
+            importance = 3
+
         try:
             points = int(points_str)
         except ValueError:
             points = 10
 
-    # Parse due date & time
         due_datetime = None
         if due_datetime_str:
             try:
@@ -470,7 +483,6 @@ class TaskCreationModal(discord.ui.Modal, title="Create New Task"):
                     ephemeral=True)
                 return
 
-    # Create task entry
         bot.task_counter += 1
         task_id = bot.task_counter
         task_info = {
@@ -478,32 +490,27 @@ class TaskCreationModal(discord.ui.Modal, title="Create New Task"):
             "description": description,
             "due_date": due_datetime.isoformat() if due_datetime else None,
             "priority": priority,
+            "importance": importance,  # stored separately
             "points": points,
             "created_at": datetime.now(EST).isoformat(),
             "status": "Pending"
         }
 
-        # Save in user_tasks_created (only stored privately for now)
-        bot.user_tasks_created.setdefault(interaction.user.id,
-                                          {})[task_id] = task_info
+        bot.user_tasks_created.setdefault(interaction.user.id, {})[task_id] = task_info
 
-        # Confirm to user
         embed = discord.Embed(title=f"📝 Task #{task_id} Added",
                               color=COLORS["success"])
         embed.add_field(name="Name", value=name, inline=False)
         embed.add_field(name="Description", value=description, inline=False)
         embed.add_field(name="Due Date/Time",
-                        value=due_datetime.strftime("%Y-%m-%d %H:%M")
-                        if due_datetime else "Not specified",
+                        value=due_datetime.strftime("%Y-%m-%d %H:%M") if due_datetime else "Not specified",
                         inline=True)
         embed.add_field(name="Priority", value=priority.title(), inline=True)
+        embed.add_field(name="Importance", value=str(importance), inline=True)
         embed.add_field(name="Points", value=str(points), inline=True)
         embed.set_footer(text=f"Created by {interaction.user.display_name}")
 
         await interaction.response.send_message(embed=embed)
-
-    # DO NOT call update_task_channel here — it's only for public assignments
-
 
 class LogsPaginatedView(discord.ui.View):
 
