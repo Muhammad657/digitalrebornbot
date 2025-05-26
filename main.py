@@ -49,8 +49,10 @@ COLORS = {
     "warning": 0xFEE75C,  # Discord yellow
     "error": 0xED4245,  # Discord red
     "neutral": 0xEB459E,  # Discord pink
-    "dark": 0x23272A,  # Discord dark
-    "light": 0xFFFFFF  # White
+    "dark": 0x23272A, # Discord dark
+    "info": 0x3498db, 
+    "light": 0xFFFFFF,  # White
+     
 }
 
 intents = discord.Intents.default()
