@@ -1228,6 +1228,7 @@ async def custom_help(ctx, command_name: str = None):
                     await ctx.send(
                         "⚠️ Couldn't DM you the help. Please enable DMs.",
                         delete_after=10)
+                return
             else:
                 # Non-admin trying to access admin command
                 await ctx.send("❌ Command not found", delete_after=5)
@@ -1243,8 +1244,10 @@ async def custom_help(ctx, command_name: str = None):
                             value=f"`{cmd_info['syntax']}`",
                             inline=False)
             await ctx.send(embed=embed)
+            return
         else:
             await ctx.send("❌ Command not found", delete_after=5)
+            return
 
     # No command specified - show general help
     embed = discord.Embed(title="📚 TaskBot Help",
@@ -2486,12 +2489,12 @@ async def check_due_dates():
                 time_left = due_date - now
                 total_hours_left = time_left.total_seconds() / 3600
 
+                # Debug print
                 print(f"[DEBUG] Now: {now} | Task #{task_id} Due: {due_date} | Hours left: {total_hours_left:.2f}")
 
-                # 24-Hour Reminder: Due between now+24h and now+24h+1min
+                # 24-Hour Reminder (once)
                 target_window_start = now + timedelta(hours=24)
                 target_window_end = now + timedelta(hours=24, minutes=1)
-
                 if target_window_start <= due_date < target_window_end and not task.get("reminded_24h"):
                     embed = discord.Embed(
                         title="🔔 Task Due in 24 Hours!",
@@ -2501,20 +2504,56 @@ async def check_due_dates():
                     await bot.get_channel(TASK_CHANNEL_ID).send(f"{member.mention}", embed=embed)
                     task["reminded_24h"] = True
 
-                # Overdue check
-                if total_hours_left <= 0 and not task.get("reminded_overdue"):
+                # Every 2-hour reminder within 24h window
+                if 1 < total_hours_left < 24:
+                    last_2h_reminder = task.get("last_2h_reminder")
+                    rounded_hours = int(total_hours_left)
+                    if rounded_hours % 2 == 0 and last_2h_reminder != rounded_hours:
+                        embed = discord.Embed(
+                            title="⏰ Task Due Soon",
+                            description=f"Task `#{task_id}` is due in {rounded_hours} hours at {due_date.strftime('%Y-%m-%d %H:%M')}",
+                            color=COLORS["warning"]
+                        )
+                        await bot.get_channel(TASK_CHANNEL_ID).send(f"{member.mention}", embed=embed)
+                        task["last_2h_reminder"] = rounded_hours
+
+                # Last 1-hour reminder (once)
+                target_window_start_1h = now + timedelta(hours=1)
+                target_window_end_1h = now + timedelta(hours=1, minutes=1)
+                if target_window_start_1h <= due_date < target_window_end_1h and not task.get("reminded_1h"):
                     embed = discord.Embed(
-                        title="🚨 Task Overdue!",
-                        description=f"Task `#{task_id}` was due at {due_date.strftime('%Y-%m-%d %H:%M')}!",
-                        color=COLORS["error"]
+                        title="⏰ Task Due in 1 Hour!",
+                        description=f"Task `#{task_id}` is due at {due_date.strftime('%Y-%m-%d %H:%M')}",
+                        color=COLORS["warning"]
                     )
                     await bot.get_channel(TASK_CHANNEL_ID).send(f"{member.mention}", embed=embed)
-                    task["reminded_overdue"] = True
+                    task["reminded_1h"] = True
+
+                # Overdue reminders (repeated until completion)
+                if total_hours_left <= 0:
+                    if not task.get("reminded_overdue"):
+                        # First overdue alert
+                        embed = discord.Embed(
+                            title="🚨 Task Overdue!",
+                            description=f"Task `#{task_id}` was due at {due_date.strftime('%Y-%m-%d %H:%M')}! Please complete it ASAP!",
+                            color=COLORS["error"]
+                        )
+                        await bot.get_channel(TASK_CHANNEL_ID).send(f"{member.mention}", embed=embed)
+                        task["reminded_overdue"] = True
+                    else:
+                        # Subsequent overdue reminders (optional, comment out if too spammy)
+                        embed = discord.Embed(
+                            title="⚠️ Task Still Overdue!",
+                            description=f"Task `#{task_id}` is still overdue! Please complete it quickly!",
+                            color=COLORS["error"]
+                        )
+                        await bot.get_channel(TASK_CHANNEL_ID).send(f"{member.mention}", embed=embed)
 
             except Exception as e:
                 print(f"[ERROR] Task #{task_id} error: {e}")
 
     save_tasks(bot.task_assignments)
+
 
 
                 
