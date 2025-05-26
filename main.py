@@ -1447,12 +1447,12 @@ async def show_user_tasks(ctx, member: discord.Member = None, *args):
         embed = discord.Embed(title=f"{title} ({len(task_list)})", color=color)
         for task_id, task, due_date in task_list:
             desc = task.get("description", "Untitled")
-            priority = task.get("priority", "Normal").title()
+            priority = str(task.get("priority", "Normal")).title()
             due_str = due_date.strftime('%b %d, %H:%M') if due_date else 'No deadline'
             if title.startswith("✅"):
                 value = f"~~{desc}~~"
             else:
-                importance = task.get("importance", "Normal").title()
+                importance = str(task.get("importance", "1")).title()
                 value = (
                     f"**{desc}**\n"
                     f"⏰ Due: {due_str}\n"
@@ -1948,7 +1948,8 @@ async def assign_task(ctx, member: discord.Member, task_id: int):
     embed.add_field(name="Description", value=task_found['description'], inline=False)
     embed.add_field(name="Due Date", value=task_found.get('due_date', 'Not specified'), inline=True)
     embed.add_field(name="Priority", value=task_found.get('priority', 'Normal').capitalize(), inline=True)
-    embed.add_field(name="Importance", value=task_found.get('importance', 'Not specified').capitalize(), inline=True)  # NEW
+    embed.add_field(name="Importance",value=str(task_found.get('importance', 'Not specified')).capitalize(),inline=True)
+
     embed.add_field(name="Points", value=str(task_found.get('points', 0)), inline=True)
 
     await ctx.send(embed=embed)
