@@ -307,7 +307,7 @@ async def update_task_channel():
                 f"▸ {status} | "
                 f"⏰ {due_date.strftime('%b %d %H:%M') if due_date else 'No deadline'} | "
                 f"🔮 {priority.title()} | "
-                f"⭐ Importance: {task.get('importance', 3)} | "
+                f"⭐ Importance: {task.get('importance', '3')} | "
                 f"💬 {len(comments.get(str(task_id), []))} comments")
 
 
