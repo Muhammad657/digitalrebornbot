@@ -885,22 +885,20 @@ async def send_summary_to_admin():
     # Reset logs
     # save_logs({})
 
-
-@tasks.loop(minutes=60)  # Runs hourly
+@tasks.loop(minutes=60)  # Runs every hour
 async def evening_ping_task():
     now = datetime.now(EST)
     current_time = now.time()
     today = now.date()
 
-    # Stop if it's before 4 PM or after midnight (but before next 4 PM)
-    if current_time < time(16, 0) or current_time >= time(0, 0):
-        return  # Exit if outside the 4 PM - midnight window
+    # Only run between 4 PM and 11:59 PM
+    if not (time(16, 0) <= current_time <= time(23, 59, 59)):
+        return
 
     channel = bot.get_channel(CHANNEL_ID)
     user_logs = load_logs()
     members = [m for m in channel.guild.members if not m.bot]
 
-    # Only ping users who haven't logged TODAY (even after midnight)
     slackers = [
         m.mention for m in members
         if str(m.id) not in user_logs or str(today) not in user_logs[str(m.id)]
@@ -910,7 +908,7 @@ async def evening_ping_task():
         await channel.send(embed=discord.Embed(
             title="⚠️ Reminder: Log Your Work",
             description=
-            f"These users haven't logged today: {', '.join(slackers)}. Log in now or im coming to touch you'll.",
+            f"These users haven't logged today: {', '.join(slackers)}. Log in now or I'm coming to touch you'll.",
             color=COLORS["warning"]))
 
 
@@ -941,10 +939,19 @@ async def check_overdue_tasks():
                         except:
                             pass
 
-
 @tasks.loop(hours=24)
 async def daily_reset_responders():
     bot.daily_responders.clear()
+    
+@daily_reset_responders.before_loop
+async def before_reset():
+    now = datetime.now(EST)
+    next_midnight = datetime.combine(now + timedelta(days=1), time(0, 0))
+    wait_seconds = (next_midnight - now).total_seconds()
+    await asyncio.sleep(wait_seconds)
+    
+
+
 
 
 # ========== Events ==========
@@ -2458,16 +2465,6 @@ async def add_category(ctx, task_id: int, *, category: str):
     await ctx.send(embed=embed)
     await update_task_channel()
 
-# @tasks.loop(minutes=1)  # Test every minute
-# async def check_due_dates():
-#     now = datetime.now(EST)
-#     channel = bot.get_channel(TASK_CHANNEL_ID)
-#     await channel.send(
-#         f"⚠️ TEST REMINDER at {now}. " 
-#         f"Next check: {now + timedelta(hours=1)}"
-#     )
-#     print(f"[DEBUG] Running due date check at {now}")
-
 from datetime import datetime, timedelta
 
 @tasks.loop(minutes=1)
@@ -2561,50 +2558,55 @@ async def check_due_dates():
 # 5. Weekly Summary
 
 
-@tasks.loop(time=time(18, 0))  # Runs at midnight on Sunday
+@tasks.loop(minutes=1)
 async def weekly_summary():
     await bot.wait_until_ready()
 
-    # Only run on Sundays
-    if datetime.now(EST).weekday() != 6:  # Sunday is 6
-        return
+    now = datetime.now(EST)
+    if now.weekday() == 6 and now.hour == 18 and now.minute == 0:
+        channel = bot.get_channel(CHANNEL_ID)
+        if channel is None:
+            return
 
-    channel = bot.get_channel(CHANNEL_ID)
-    if channel is None:
-        return
+        logs = load_logs()
+        if not logs:
+            return
 
-    logs = load_logs()
-    if not logs:
-        return
+        embed = discord.Embed(
+            title="📊 Weekly Summary",
+            description="Here's the weekly activity report",
+            color=COLORS["neutral"],
+            timestamp=now
+        )
 
-    embed = discord.Embed(title="📊 Weekly Summary",
-                          description="Here's the weekly activity report",
-                          color=COLORS["neutral"],
-                          timestamp=datetime.now(EST))
+        user_log_counts = {
+            uid: len(user_logs) for uid, user_logs in logs.items()
+        }
+        sorted_users = sorted(
+            user_log_counts.items(), key=lambda x: x[1], reverse=True)
 
-    # Count logs per user
-    user_log_counts = {uid: len(user_logs) for uid, user_logs in logs.items()}
-    sorted_users = sorted(user_log_counts.items(),
-                          key=lambda x: x[1],
-                          reverse=True)
+        if sorted_users:
+            embed.add_field(
+                name="🏆 Top Contributors",
+                value="\n".join(f"<@{uid}>: {count} logs"
+                                for uid, count in sorted_users[:3]),
+                inline=False
+            )
 
-    # Add top contributors
-    if sorted_users:
-        embed.add_field(name="🏆 Top Contributors",
-                        value="\n".join(f"<@{uid}>: {count} logs"
-                                        for uid, count in sorted_users[:3]),
-                        inline=False)
+        completed_tasks = sum(
+            1 for user_tasks in bot.task_assignments.values()
+            for task in user_tasks.values()
+            if task.get("status") == "Completed"
+        )
 
-    # Add task completion stats
-    completed_tasks = sum(1 for user_tasks in bot.task_assignments.values()
-                          for task in user_tasks.values()
-                          if task.get("status") == "Completed")
-    embed.add_field(name="✅ Completed Tasks",
-                    value=f"{completed_tasks} tasks completed this week",
-                    inline=True)
+        embed.add_field(
+            name="✅ Completed Tasks",
+            value=f"{completed_tasks} tasks completed this week",
+            inline=True
+        )
 
-    embed.set_footer(text="Great work everyone! Keep it up!")
-    await channel.send(embed=embed)
+        embed.set_footer(text="Great work everyone! Keep it up!")
+        await channel.send(embed=embed)
 
 
 # 6. User Profile Command
