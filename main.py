@@ -1238,7 +1238,11 @@ async def custom_help(ctx, command_name: str = None):
         "snooze": {
             "description": "Snooze reminders",
             "syntax": "!snooze <minutes>"
+        }, "tasks": {
+            "description": "View assigned tasks for yourself or another user.",
+            "syntax": "!tasks - View your tasks\n!tasks @user - View tasks assigned to that user\n!tasks @user [filter] - Filter tasks by status (overdue, completed, pending)\nExample: !tasks @Muhammad pending"
         }
+
     }
 
     if command_name:
