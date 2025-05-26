@@ -1678,16 +1678,19 @@ async def add_task(ctx, *, args=None):
     await ctx.send(embed=embed)
     await update_task_channel()  # Update task channel
 
-
 @bot.command(name="assign",
              help="Assign task to member: !assign @member <task ID>")
 @admin_only()
 @is_admin()
 async def assign_task(ctx, member: discord.Member, task_id: int):
     task_found = None
+    creator_id_to_remove_from = None
+
+    # Find task and creator
     for creator_id, tasks in bot.user_tasks_created.items():
         if task_id in tasks:
             task_found = tasks[task_id]
+            creator_id_to_remove_from = creator_id
             break
 
     if not task_found:
@@ -1700,31 +1703,30 @@ async def assign_task(ctx, member: discord.Member, task_id: int):
     bot.task_assignments[member.id][task_id] = dict(task_found)
     bot.task_assignments[member.id][task_id]["status"] = "Pending"
     bot.task_assignments[member.id][task_id]["assigned_to"] = member.id
-    bot.task_assignments[
-        member.id][task_id]["assigned_name"] = member.display_name
-    save_tasks(bot.task_assignments)
+    bot.task_assignments[member.id][task_id]["assigned_name"] = member.display_name
 
-    due_str = f", due by {task_found['due_date']}" if task_found[
-        'due_date'] else ""
+    # Remove from user_tasks_created since it's now assigned
+    if creator_id_to_remove_from is not None:
+        del bot.user_tasks_created[creator_id_to_remove_from][task_id]
+        # If user has no more tasks, remove the key completely
+        if not bot.user_tasks_created[creator_id_to_remove_from]:
+            del bot.user_tasks_created[creator_id_to_remove_from]
+
+    # Save both
+    save_tasks(bot.task_assignments)
+    save_created_tasks(bot.user_tasks_created)  # <-- You’ll need this function
+
+    due_str = f", due by {task_found['due_date']}" if task_found['due_date'] else ""
     points_str = f" | Points: {task_found.get('points', 0)}"
 
     embed = discord.Embed(
         title="📌 Task Assigned",
-        description=
-        f"Task #{task_id} has been assigned to {member.display_name}",
+        description=f"Task #{task_id} has been assigned to {member.display_name}",
         color=COLORS["success"])
-    embed.add_field(name="Description",
-                    value=task_found['description'],
-                    inline=False)
-    embed.add_field(name="Due Date",
-                    value=task_found.get('due_date', 'Not specified'),
-                    inline=True)
-    embed.add_field(name="Priority",
-                    value=task_found.get('priority', 'Normal').capitalize(),
-                    inline=True)
-    embed.add_field(name="Points",
-                    value=str(task_found.get('points', 0)),
-                    inline=True)
+    embed.add_field(name="Description", value=task_found['description'], inline=False)
+    embed.add_field(name="Due Date", value=task_found.get('due_date', 'Not specified'), inline=True)
+    embed.add_field(name="Priority", value=task_found.get('priority', 'Normal').capitalize(), inline=True)
+    embed.add_field(name="Points", value=str(task_found.get('points', 0)), inline=True)
 
     await ctx.send(embed=embed)
     await update_task_channel()  # Update task channel
