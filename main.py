@@ -209,7 +209,7 @@ async def cleanup_task_assignments():
     bot.task_assignments = merged_assignments
     save_tasks(bot.task_assignments)
 
-def award_points(user_id: str, task_id: str, points: int):
+def award_points(user_id: str, task_id: str, points: int, description: str = ""):
     if not hasattr(bot, 'user_scores'):
         bot.user_scores = {}
 
@@ -217,9 +217,17 @@ def award_points(user_id: str, task_id: str, points: int):
         bot.user_scores[user_id] = {}
 
     if task_id not in bot.user_scores[user_id]:
-        bot.user_scores[user_id][task_id] = 0
+        bot.user_scores[user_id][task_id] = {
+            "points": 0,
+            "description": description or task_id,
+            "notes": []
+        }
 
-    bot.user_scores[user_id][task_id] += points
+    bot.user_scores[user_id][task_id]["points"] += points
+
+    # Update description if provided (non-empty)
+    if description:
+        bot.user_scores[user_id][task_id]["description"] = description
 
 
 def save_created_tasks(data):
@@ -1514,9 +1522,7 @@ async def testreminder(ctx, task_id: int):
     )
     await ctx.send(embed=embed)
     
-@bot.command(name="leaderboard",
-             aliases=["lb"],
-             help="Show the current leaderboard")
+@bot.command(name="leaderboard", aliases=["lb"], help="Show the current leaderboard")
 async def leaderboard(ctx):
     if not hasattr(bot, 'user_scores') or not bot.user_scores:
         embed = discord.Embed(
@@ -1527,8 +1533,8 @@ async def leaderboard(ctx):
 
     # Calculate total scores for each user
     total_scores = {
-        user_id: sum(task_data.get("points", 0) for task_data in task_points.values())
-        for user_id, task_points in bot.user_scores.items()
+        user_id: sum(task_data.get("points", 0) for task_data in tasks.values())
+        for user_id, tasks in bot.user_scores.items()
     }
 
     # Sort users by total score (descending)
@@ -1544,9 +1550,9 @@ async def leaderboard(ctx):
 
         task_details = ""
         for task_id, task_data in bot.user_scores[user_id].items():
-            task_label = task_data.get("description", task_id)
-            points = task_data.get("points", 0)
-            task_details += f"• {task_label}: {points} pts\n"
+            desc = task_data.get("description", task_id)
+            pts = task_data.get("points", 0)
+            task_details += f"• {desc}: {pts} pts\n"
 
         embed.add_field(
             name=f"{rank}. {name} — {total_score} pts",
@@ -1556,7 +1562,6 @@ async def leaderboard(ctx):
 
     embed.set_footer(text=f"Total participants: {len(bot.user_scores)}")
     await ctx.send(embed=embed)
-
 
 
 @bot.command(name="adjustpoints",
@@ -2034,7 +2039,7 @@ async def complete_task(ctx, task_id: int):
     task_name = task.get("name") or task.get("description") or f"Task #{task_id}"
 
     # ✅ Award points with correct task name
-    award_points(str(ctx.author.id), task_name, points)
+    award_points(str(ctx.author.id), str(task_id), points, description=task_name)
 
     # ✅ Save updated scores to file
     with open("scores.json", "w") as f:
