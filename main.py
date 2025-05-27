@@ -908,7 +908,11 @@ async def update_leaderboard_channel():
     embed.set_footer(text=f"Total participants: {len(leaderboard)}")
 
     # Purge existing messages and resend
-    await channel.purge(limit=5)
+    async for msg in channel.history(limit=10):
+    if msg.author == bot.user:
+        await msg.delete()
+        break
+
     await channel.send(embed=embed)
 
 
@@ -1717,11 +1721,13 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int, *
 
     if hasattr(bot, 'user_scores'):
         if new_points == 0:
-            bot.user_scores[user_id_str].pop(task_id, None)
-            # If user has no more tasks, optionally remove their entry entirely
-            if not bot.user_scores[user_id_str]:
-                bot.user_scores.pop(user_id_str, None)
+            if user_id_str in bot.user_scores:
+                bot.user_scores[user_id_str].pop(task_id, None)
+                if not bot.user_scores[user_id_str]:
+                    bot.user_scores.pop(user_id_str, None)
         else:
+            if user_id_str not in bot.user_scores:
+                bot.user_scores[user_id_str] = {}
             bot.user_scores[user_id_str][task_id] = {
                 "points": new_points,
                 "description": desc,
@@ -2718,12 +2724,15 @@ async def remove_task(ctx, *, args: str = None):
         # Case 2: task ID only
         if task_id is not None and member is None:
             found = False
-            for user_id, tasks in bot.task_assignments.items():
+            for user_id, tasks in list(bot.task_assignments.items()):
                 if task_id in tasks:
                     del tasks[task_id]
                     member = await bot.fetch_user(int(user_id))
+                    if not tasks:
+                        del bot.task_assignments[user_id]
                     found = True
                     break
+
             if found:
                 save_tasks(bot.task_assignments)
                 await ctx.send(f"✅ Removed task {task_id} (assigned to {member.display_name}).")
