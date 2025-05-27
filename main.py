@@ -1646,27 +1646,21 @@ async def leaderboard(ctx):
 @bot.command(name="adjustpoints", help="Add or remove points from a user (Admin only)")
 @is_admin()
 async def adjust_points(ctx, member: discord.Member, action: str, amount: int, *, rest: str):
-    """
-    Usage:
-    !adjustpoints @user add 50 "Task Title With Spaces" "Optional note here"
-    """
+    import shlex
     action = action.lower()
+
     if action not in ["add", "remove"]:
-        return await ctx.send("❌ Invalid action. Use 'add' or 'remove'.")
+        return await ctx.send("❌ Invalid action. Use `add` or `remove`.")
 
     if amount <= 0:
-        return await ctx.send("❌ Amount must be positive.")
+        return await ctx.send("❌ Amount must be a positive number.")
 
-    # Parse task_id and optional note using shlex to support quotes
     try:
         args = shlex.split(rest)
-        task_id = args[0]
-        note = args[1] if len(args) > 1 else ""
     except Exception:
         return await ctx.send(
-            "❌ Invalid format.\n"
-            "Please wrap the task ID and optional note in quotes.\n"
-            "**Example:** `!adjustpoints @user add 20 \"My Task Title\" \"Optional note here\"`"
+            "❌ Invalid format. Use quotes properly.\n"
+            "**Example:** `!adjustpoints @User add 10 \"task42\" \"Write docs\"` or `!adjustpoints @User add 10 \"Write docs\"`"
         )
 
     # Load scores
@@ -1677,48 +1671,72 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int, *
         scores = {}
 
     user_id_str = str(member.id)
-    if user_id_str not in scores or not isinstance(scores[user_id_str], dict):
+    if user_id_str not in scores:
         scores[user_id_str] = {}
 
-    current_task = scores[user_id_str].get(task_id, {"points": 0, "description": "", "notes": []})
-    current_points = current_task.get("points", 0)
+    user_tasks = scores[user_id_str]
+
+    task_id = None
+    description = ""
+    note = ""
 
     if action == "add":
-        new_points = current_points + amount
-        action_word = "added to"
-    else:
-        new_points = max(0, current_points - amount)
-        action_word = "removed from"
+        if len(args) == 1:
+            # Only description provided, generate task ID
+            description = args[0]
+            base_id = "task"
+            index = 1
+            while f"{base_id}{index}" in user_tasks:
+                index += 1
+            task_id = f"{base_id}{index}"
+        elif len(args) >= 2:
+            task_id = args[0]
+            description = args[1]
+        if len(args) >= 3:
+            note = args[2]
+    else:  # remove
+        # Try by ID
+        if args[0] in user_tasks:
+            task_id = args[0]
+            description = user_tasks[task_id].get("description", "")
+        else:
+            # Try by matching description
+            for tid, task in user_tasks.items():
+                if task.get("description", "") == args[0]:
+                    task_id = tid
+                    description = task.get("description", "")
+                    break
+            if not task_id:
+                return await ctx.send(f"❌ No task found with ID or description `{args[0]}` for {member.mention}")
+        if len(args) >= 2:
+            note = args[1]
 
-    # Task description fallback
-    desc = current_task.get("description", "")
-    if hasattr(bot, "task_assignments"):
-        task_data = bot.task_assignments.get(int(member.id), {}).get(task_id)
-        if task_data:
-            desc = task_data.get("description", desc)
+    current_task = user_tasks.get(task_id, {"points": 0, "description": description, "notes": []})
+    current_points = current_task.get("points", 0)
 
-    # If no description, use note
-    if not desc and note:
-        desc = note
+    new_points = max(0, current_points + amount if action == "add" else current_points - amount)
+    action_word = "added to" if action == "add" else "removed from"
 
-    # Append note
-    notes = current_task.get("notes", [])
+    # Append note if present
     if note:
-        notes.append(note)
+        current_task.setdefault("notes", []).append(note)
 
-    # Store updated data
+    # Update description (only when adding)
+    if action == "add":
+        current_task["description"] = description
+
+    # Save or delete task
     if new_points == 0:
-        scores[user_id_str].pop(task_id, None)
+        user_tasks.pop(task_id, None)
     else:
-        scores[user_id_str][task_id] = {
-            "points": new_points,
-            "description": desc,
-            "notes": notes
-        }
+        current_task["points"] = new_points
+        user_tasks[task_id] = current_task
 
+    # Save to file
     with open("scores.json", "w") as f:
         json.dump(scores, f, indent=2)
 
+    # Update cache if using
     if hasattr(bot, 'user_scores'):
         if new_points == 0:
             if user_id_str in bot.user_scores:
@@ -1728,30 +1746,26 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int, *
         else:
             if user_id_str not in bot.user_scores:
                 bot.user_scores[user_id_str] = {}
-            bot.user_scores[user_id_str][task_id] = {
-                "points": new_points,
-                "description": desc,
-                "notes": notes
-            }
+            bot.user_scores[user_id_str][task_id] = current_task
 
+    total_points = sum(task["points"] for task in user_tasks.values())
 
-    total_points = sum(task["points"] for task in scores[user_id_str].values())
-
+    # Respond
     embed = discord.Embed(
         title="✅ Points Adjusted",
-        description=f"{amount} points {action_word} {member.mention} for task '{desc or task_id}'",
+        description=f"{amount} points {action_word} {member.mention} for task `{description}`",
         color=COLORS["success"]
     )
     embed.add_field(name="New Task Score", value=f"{new_points} points")
     embed.add_field(name="Total Score", value=f"{total_points} points")
-
-    footer_text = f"Adjusted by {ctx.author.display_name}"
+    footer = f"Adjusted by {ctx.author.display_name}"
     if note:
-        footer_text += f" | Note: {note}"
-    embed.set_footer(text=footer_text)
+        footer += f" | Note: {note}"
+    embed.set_footer(text=footer)
 
     await ctx.send(embed=embed)
     await update_leaderboard_channel()
+
 
 @bot.command(name="forcework",
              help="Ping everyone who hasn't logged work today (Admin only)")
