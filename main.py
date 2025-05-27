@@ -339,7 +339,9 @@ async def update_task_channel():
 
         await channel.send(embed=embed)
 
-
+def get_user_lives(user_id):
+    lives = load_lives()
+    return lives.get(str(user_id), 3)
 
 def load_lives():
     try:
@@ -2087,22 +2089,22 @@ async def create_task(ctx):
 @admin_only()
 async def add_life(ctx, member: discord.Member):
     try:
-        # Try to delete the command message first
         await ctx.message.delete()
     except discord.Forbidden:
-        pass  # Bot doesn't have permission to delete messages
+        pass
 
     lives = load_lives()
-    current_lives = lives.get(str(member.id), 0)
+    # Default to 3 lives if user not found
+    current_lives = lives.get(str(member.id), 3)
 
     if current_lives >= MAX_LIVES:
         embed = discord.Embed(
             title="❤️ Max Lives",
-            description=
-            f"{member.mention} already has the maximum of {MAX_LIVES} lives.",
+            description=(
+                f"{member.mention} already has the maximum of {MAX_LIVES} lives."
+            ),
             color=COLORS["success"])
-        return await ctx.send(embed=embed,
-                              delete_after=30)  # Auto-delete after 30 seconds
+        return await ctx.send(embed=embed, delete_after=30)
 
     lives[str(member.id)] = current_lives + 1
     save_lives(lives)
@@ -2112,32 +2114,32 @@ async def add_life(ctx, member: discord.Member):
         title="✨ Life Added",
         description=(
             f"{member.mention} got a life added!\n"
-            f"Good job on working hard. ❤️ {current_lives + 1}/{MAX_LIVES}"),
+            f"Good job on working hard. ❤️ {current_lives + 1}/{MAX_LIVES}"
+        ),
         color=COLORS["success"])
-    await ctx.send(embed=embed,
-                   delete_after=30)  # Auto-delete after 30 seconds
+    await ctx.send(embed=embed, delete_after=30)
 
 
 @bot.command(name="removelife", help="Remove a life from a user (Admin only)")
 @admin_only()
 async def remove_life(ctx, member: discord.Member):
     try:
-        # Try to delete the command message first
         await ctx.message.delete()
     except discord.Forbidden:
-        pass  # Bot doesn't have permission to delete messages
+        pass
 
     lives = load_lives()
-    current_lives = lives.get(str(member.id), 0)
+    # Default to 3 lives if user not found
+    current_lives = lives.get(str(member.id), 3)
 
     if current_lives <= 0:
         embed = discord.Embed(
             title="⚡ Strike Issued",
-            description=
-            (f"{member.mention} has been hit by a strike!\n"
-             f"🚨 You now have 0 lives remaining.\n"
-             f"This will result in high penalties that will be discussed in our next meeting."
-             ),
+            description=(
+                f"{member.mention} has been hit by a strike!\n"
+                f"🚨 You now have 0 lives remaining.\n"
+                f"This will result in high penalties that will be discussed in our next meeting."
+            ),
             color=COLORS["error"])
         return await ctx.send(embed=embed, delete_after=30)
 
@@ -2147,9 +2149,11 @@ async def remove_life(ctx, member: discord.Member):
 
     remaining = current_lives - 1
     if remaining > 0:
-        message = (f"{member.mention} has been hit by a strike!\n"
-                   f"❤️ Remaining lives: {remaining}/{MAX_LIVES}\n"
-                   f"Please make sure you're on track.")
+        message = (
+            f"{member.mention} has been hit by a strike!\n"
+            f"❤️ Remaining lives: {remaining}/{MAX_LIVES}\n"
+            f"Please make sure you're on track."
+        )
         color = COLORS["warning"]
     else:
         message = (
@@ -2159,17 +2163,14 @@ async def remove_life(ctx, member: discord.Member):
         )
         color = COLORS["error"]
 
-    embed = discord.Embed(title="⚡ Life Removed",
-                          description=message,
-                          color=color)
+    embed = discord.Embed(title="⚡ Life Removed", description=message, color=color)
     await ctx.send(embed=embed, delete_after=30)
 
 
 @bot.command(name="checklives", help="Check your remaining lives")
 async def check_lives(ctx, member: discord.Member = None):
     member = member or ctx.author
-    lives = load_lives()
-    current_lives = lives.get(str(member.id), 0)
+    current_lives = get_user_lives(member.id)
 
     embed = discord.Embed(
         title=f"❤️ {member.display_name}'s Lives",
