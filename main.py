@@ -17,6 +17,7 @@ from typing import Dict, List, Set, Any, Optional
 from discord.ui import View, Button
 from flask import Flask
 import threading
+import shlex
 
 app = Flask('')
 
@@ -1566,18 +1567,13 @@ async def leaderboard(ctx):
     await ctx.send(embed=embed)
 
 
-@bot.command(name="adjustpoints",
-             help="Add or remove points from a user (Admin only)")
+@bot.command(name="adjustpoints", help="Add or remove points from a user (Admin only)")
 @is_admin()
-async def adjust_points(ctx, member: discord.Member, action: str, amount: int, task_id: str, *, note: str = ""):
+async def adjust_points(ctx, member: discord.Member, action: str, amount: int, *, rest: str):
     """
     Usage:
-    !adjustpoints @user add 50 <task_id> [optional note]
-    !adjustpoints @user remove 30 <task_id> [optional note]
-
-    Only admins can run this.
+    !adjustpoints @user add 50 "Task Title With Spaces" "Optional note here"
     """
-
     action = action.lower()
     if action not in ["add", "remove"]:
         return await ctx.send("❌ Invalid action. Use 'add' or 'remove'.")
@@ -1585,7 +1581,19 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int, t
     if amount <= 0:
         return await ctx.send("❌ Amount must be positive.")
 
-    # Load current scores
+    # Parse task_id and optional note using shlex to support quotes
+    try:
+        args = shlex.split(rest)
+        task_id = args[0]
+        note = args[1] if len(args) > 1 else ""
+    except Exception:
+        return await ctx.send(
+            "❌ Invalid format.\n"
+            "Please wrap the task ID and optional note in quotes.\n"
+            "**Example:** `!adjustpoints @user add 20 \"My Task Title\" \"Optional note here\"`"
+        )
+
+    # Load scores
     try:
         with open("scores.json", "r") as f:
             scores = json.load(f)
@@ -1606,25 +1614,23 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int, t
         new_points = max(0, current_points - amount)
         action_word = "removed from"
 
-    # Try to get description from bot.task_assignments if available
-# Try to get description from bot.task_assignments if available
+    # Task description fallback
     desc = current_task.get("description", "")
-
     if hasattr(bot, "task_assignments"):
         task_data = bot.task_assignments.get(int(member.id), {}).get(task_id)
         if task_data:
             desc = task_data.get("description", desc)
 
-# If still no description, and a note was provided, use the note as description
+    # If no description, use note
     if not desc and note:
         desc = note
 
-
-    # Update notes list if note provided
+    # Append note
     notes = current_task.get("notes", [])
     if note:
         notes.append(note)
 
+    # Store updated data
     if new_points == 0:
         scores[user_id_str].pop(task_id, None)
     else:
@@ -1634,15 +1640,12 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int, t
             "notes": notes
         }
 
-    # Save back to file
     with open("scores.json", "w") as f:
         json.dump(scores, f, indent=2)
 
-    # Update in-memory if exists
     if hasattr(bot, 'user_scores'):
         bot.user_scores[user_id_str] = scores[user_id_str]
 
-    # Calculate total points
     total_points = sum(task["points"] for task in scores[user_id_str].values())
 
     embed = discord.Embed(
@@ -1659,7 +1662,6 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int, t
     embed.set_footer(text=footer_text)
 
     await ctx.send(embed=embed)
-
 
 @bot.command(name="forcework",
              help="Ping everyone who hasn't logged work today (Admin only)")
@@ -2056,9 +2058,11 @@ async def complete_task(ctx, task_id: int):
 
     # ✅ Show user their updated score (optional: customize how it's displayed)
     user_score = bot.user_scores[str(ctx.author.id)]
-    task_summary = "\n".join(
-        [f"• {name}: {pts} pts" for name, pts in user_score.items()]
-    )
+    task_summary = "\n".join([
+        f"• {data.get('description') or task_id}: {data.get('points', 0)} pts"
+        for task_id, data in user_score.items()
+    ])
+
 
     embed = create_success_embed(
         "✅ Task Completed",
