@@ -1716,17 +1716,17 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int, *
         json.dump(scores, f, indent=2)
 
     if hasattr(bot, 'user_scores'):
-    if new_points == 0:
-        bot.user_scores[user_id_str].pop(task_id, None)
-        # If user has no more tasks, optionally remove their entry entirely
-        if not bot.user_scores[user_id_str]:
-            bot.user_scores.pop(user_id_str, None)
-    else:
-        bot.user_scores[user_id_str][task_id] = {
-            "points": new_points,
-            "description": desc,
-            "notes": notes
-        }
+        if new_points == 0:
+            bot.user_scores[user_id_str].pop(task_id, None)
+            # If user has no more tasks, optionally remove their entry entirely
+            if not bot.user_scores[user_id_str]:
+                bot.user_scores.pop(user_id_str, None)
+        else:
+            bot.user_scores[user_id_str][task_id] = {
+                "points": new_points,
+                "description": desc,
+                "notes": notes
+            }
 
 
     total_points = sum(task["points"] for task in scores[user_id_str].values())
