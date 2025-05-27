@@ -1552,7 +1552,7 @@ async def leaderboard(ctx):
 
         task_details = ""
         for task_id, task_data in bot.user_scores[user_id].items():
-            desc = task_data.get("description", task_id)
+            desc = task_data.get("description") or task_id
             pts = task_data.get("points", 0)
             task_details += f"• {desc}: {pts} pts\n"
 
@@ -1607,11 +1607,18 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int, t
         action_word = "removed from"
 
     # Try to get description from bot.task_assignments if available
+# Try to get description from bot.task_assignments if available
     desc = current_task.get("description", "")
+
     if hasattr(bot, "task_assignments"):
         task_data = bot.task_assignments.get(int(member.id), {}).get(task_id)
         if task_data:
             desc = task_data.get("description", desc)
+
+# If still no description, and a note was provided, use the note as description
+    if not desc and note:
+        desc = note
+
 
     # Update notes list if note provided
     notes = current_task.get("notes", [])
