@@ -909,10 +909,9 @@ async def update_leaderboard_channel():
 
     # Purge existing messages and resend
     async for msg in channel.history(limit=10):
-    if msg.author == bot.user:
-        await msg.delete()
-        break
-
+        if msg.author == bot.user:
+            await msg.delete()
+            break
     await channel.send(embed=embed)
 
 
