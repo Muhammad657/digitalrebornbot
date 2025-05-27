@@ -53,6 +53,7 @@ COLORS = {
     "dark": 0x23272A, # Discord dark
     "info": 0x3498db, 
     "light": 0xFFFFFF,  # White
+    "highlight": 0xF1C40F
      
 }
 
