@@ -672,6 +672,8 @@ class HealthLogsView(discord.ui.View):
         return embed
 
 
+
+
 @bot.event
 async def on_command_error(ctx, error):
     # Ignore CheckFailure for admin commands (they're already handled silently)
@@ -1123,6 +1125,26 @@ async def on_raw_reaction_add(payload):
     except:
         pass
 
+@bot.command(name="myscore", help="View your total score and task breakdown")
+async def myscore(ctx):
+    user_id = str(ctx.author.id)
+    if not hasattr(bot, 'user_scores') or user_id not in bot.user_scores:
+        return await ctx.send("❌ You have no recorded tasks or points.")
+
+    tasks = bot.user_scores[user_id]
+    total_points = sum(task["points"] for task in tasks.values())
+    breakdown = "\n".join(
+        f"• {task['description'] or task_id}: {task['points']} pts"
+        for task_id, task in tasks.items()
+    )
+
+    embed = discord.Embed(
+        title=f"📊 Score Report for {ctx.author.display_name}",
+        description=f"**Total Points:** {total_points}\n\n{breakdown}",
+        color=COLORS["info"]
+    )
+    await ctx.send(embed=embed)
+
 
 @bot.command(name="help")
 async def custom_help(ctx, command_name: str = None):
@@ -1175,7 +1197,7 @@ async def custom_help(ctx, command_name: str = None):
         "removetask": {
             "description": "Remove tasks from users",
             "syntax": "!removetask [@user] [task_id]"
-        }
+        }, 
     }
 
     # Define regular commands
@@ -1256,6 +1278,9 @@ async def custom_help(ctx, command_name: str = None):
         }, "tasks": {
             "description": "View assigned tasks for yourself or another user.",
             "syntax": "!tasks - View your tasks\n!tasks @user - View tasks assigned to that user\n!tasks @user [filter] - Filter tasks by status (overdue, completed, pending)\nExample: !tasks @Muhammad pending"
+        } "myscore": {
+            "description": "View your total score and task breakdown",
+            "syntax": "!myscore"
         }
 
     }
@@ -1336,7 +1361,7 @@ async def custom_help(ctx, command_name: str = None):
     embed.add_field(name="🏆 Profile Commands",
                     value="\n".join([
                         f"`{cmd}`"
-                        for cmd in ["leaderboard", "profile", "checklives"]
+                        for cmd in ["leaderboard", "profile", "checklives","myscore"]
                     ]),
                     inline=False)
 
