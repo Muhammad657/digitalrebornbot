@@ -209,17 +209,17 @@ async def cleanup_task_assignments():
     bot.task_assignments = merged_assignments
     save_tasks(bot.task_assignments)
 
-def award_points(user_id: str, task_name: str, points: int):
+def award_points(user_id: str, task_id: str, points: int):
     if not hasattr(bot, 'user_scores'):
         bot.user_scores = {}
 
     if user_id not in bot.user_scores:
         bot.user_scores[user_id] = {}
 
-    if task_name not in bot.user_scores[user_id]:
-        bot.user_scores[user_id][task_name] = 0
+    if task_id not in bot.user_scores[user_id]:
+        bot.user_scores[user_id][task_id] = 0
 
-    bot.user_scores[user_id][task_name] += points
+    bot.user_scores[user_id][task_id] += points
 
 
 def save_created_tasks(data):
@@ -887,34 +887,38 @@ async def daily_log_reminder():
             await channel.send(embed=embed, view=LogButton())
 
 
-@tasks.loop(time=time(0,
-                      0))  # Midnight reset logs and send summary DM to admin
+@tasks.loop(minutes=1)
 async def send_summary_to_admin():
     await bot.wait_until_ready()
-    logs = load_logs()
-    admin = bot.get_user(ADMIN_ID)
-    if admin is None:
-        print("Admin user not found!")
-        return
+    now_est = datetime.now(EST)
+    if now_est.time().hour == 0 and now_est.time().minute == 0:
+        # run your midnight job
 
-    if not logs:
-        embed = create_info_embed("Daily Summary",
-                                  "No logs to show for today.")
-        await admin.send(embed=embed)
-    else:
-        for user_id, user_log in logs.items():
-            user = bot.get_user(int(user_id))
-            mention = user.mention if user else f"<User ID: {user_id}>"
+        logs = load_logs()
+        admin = bot.get_user(ADMIN_ID)
+        if admin is None:
+            print("Admin user not found!")
+            return
 
-            embed = discord.Embed(title=f"📊 Daily Logs Summary - {mention}",
-                                  color=COLORS["primary"],
-                                  timestamp=datetime.now(EST))
-
-            for date, desc in sorted(user_log.items(), reverse=True):
-                embed.add_field(name=f"📅 {date}", value=desc, inline=False)
-
-            embed.set_footer(text="End of summary")
+        if not logs:
+            embed = create_info_embed("Daily Summary", "No logs to show for today.")
             await admin.send(embed=embed)
+        else:
+            for user_id, user_log in logs.items():
+                user = bot.get_user(int(user_id))
+                mention = user.mention if user else f"<User ID: {user_id}>"
+
+                embed = discord.Embed(
+                    title=f"📊 Daily Logs Summary - {mention}",
+                    color=COLORS["primary"],
+                    timestamp=now_est
+                )
+
+                for date, desc in sorted(user_log.items(), reverse=True):
+                    embed.add_field(name=f"📅 {date}", value=desc, inline=False)
+
+                embed.set_footer(text="End of summary")
+                await admin.send(embed=embed)
 
     # Reset logs
     # save_logs({})
@@ -1523,7 +1527,7 @@ async def leaderboard(ctx):
 
     # Calculate total scores for each user
     total_scores = {
-        user_id: sum(task_points.values())
+        user_id: sum(task_data.get("points", 0) for task_data in task_points.values())
         for user_id, task_points in bot.user_scores.items()
     }
 
@@ -1539,8 +1543,10 @@ async def leaderboard(ctx):
         name = member.display_name if member else f"User ID {user_id}"
 
         task_details = ""
-        for task, points in bot.user_scores[user_id].items():
-            task_details += f"• {task}: {points} pts\n"
+        for task_id, task_data in bot.user_scores[user_id].items():
+            task_label = task_data.get("description", task_id)
+            points = task_data.get("points", 0)
+            task_details += f"• {task_label}: {points} pts\n"
 
         embed.add_field(
             name=f"{rank}. {name} — {total_score} pts",
@@ -1556,15 +1562,16 @@ async def leaderboard(ctx):
 @bot.command(name="adjustpoints",
              help="Add or remove points from a user (Admin only)")
 @is_admin()
-async def adjust_points(ctx, member: discord.Member, action: str, amount: int, *, task: str = "general"):
+async def adjust_points(ctx, member: discord.Member, action: str, amount: int, task_id: str, *, note: str = ""):
     """
-    !adjustpoints @user add 50 [task_name]
-    !adjustpoints @user remove 30 [task_name]
+    Usage:
+    !adjustpoints @user add 50 <task_id> [optional note]
+    !adjustpoints @user remove 30 <task_id> [optional note]
 
-    If task_name is not given, defaults to "general".
+    Only admins can run this.
     """
+
     action = action.lower()
-
     if action not in ["add", "remove"]:
         return await ctx.send("❌ Invalid action. Use 'add' or 'remove'.")
 
@@ -1579,41 +1586,63 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int, *
         scores = {}
 
     user_id_str = str(member.id)
-
-    # Make sure user has a dict for tasks
     if user_id_str not in scores or not isinstance(scores[user_id_str], dict):
         scores[user_id_str] = {}
 
-    current_task_score = scores[user_id_str].get(task, 0)
+    current_task = scores[user_id_str].get(task_id, {"points": 0, "description": "", "notes": []})
+    current_points = current_task.get("points", 0)
 
     if action == "add":
-        new_task_score = current_task_score + amount
+        new_points = current_points + amount
         action_word = "added to"
     else:
-        new_task_score = max(0, current_task_score - amount)
+        new_points = max(0, current_points - amount)
         action_word = "removed from"
 
-    # Update the task score
-    scores[user_id_str][task] = new_task_score
+    # Try to get description from bot.task_assignments if available
+    desc = current_task.get("description", "")
+    if hasattr(bot, "task_assignments"):
+        task_data = bot.task_assignments.get(int(member.id), {}).get(task_id)
+        if task_data:
+            desc = task_data.get("description", desc)
 
-    # Save back
+    # Update notes list if note provided
+    notes = current_task.get("notes", [])
+    if note:
+        notes.append(note)
+
+    if new_points == 0:
+        scores[user_id_str].pop(task_id, None)
+    else:
+        scores[user_id_str][task_id] = {
+            "points": new_points,
+            "description": desc,
+            "notes": notes
+        }
+
+    # Save back to file
     with open("scores.json", "w") as f:
         json.dump(scores, f, indent=2)
 
-    # Update in-memory scores if needed
+    # Update in-memory if exists
     if hasattr(bot, 'user_scores'):
         bot.user_scores[user_id_str] = scores[user_id_str]
 
     # Calculate total points
-    total_points = sum(scores[user_id_str].values())
+    total_points = sum(task["points"] for task in scores[user_id_str].values())
 
     embed = discord.Embed(
         title="✅ Points Adjusted",
-        description=f"{amount} points {action_word} {member.mention} for task '{task}'",
-        color=COLORS["success"])
-    embed.add_field(name="New Task Score", value=f"{new_task_score} points")
+        description=f"{amount} points {action_word} {member.mention} for task '{desc or task_id}'",
+        color=COLORS["success"]
+    )
+    embed.add_field(name="New Task Score", value=f"{new_points} points")
     embed.add_field(name="Total Score", value=f"{total_points} points")
-    embed.set_footer(text=f"Adjusted by {ctx.author.display_name}")
+
+    footer_text = f"Adjusted by {ctx.author.display_name}"
+    if note:
+        footer_text += f" | Note: {note}"
+    embed.set_footer(text=footer_text)
 
     await ctx.send(embed=embed)
 
@@ -2166,7 +2195,7 @@ async def my_tasks(ctx):
             f"▸ {status} | "
             f"⏰ {due_date.strftime('%b %d %H:%M') if due_date else 'No deadline'} | "
             f"🔮 {task.get('priority', 'Normal').title()} | "
-            f"❗ {task.get('importance', 'Normal').title()} | "  # Added importance here
+            f"❗ {str(task.get('importance', '1'))} | "
             f"💬 {0} comments")
         embed.add_field(name="\u200b", value=task_line, inline=False)
 
@@ -2342,6 +2371,49 @@ async def health(ctx, member: discord.Member = None):
     view = HealthLogsView(member.id, user_logs)
     embed = view.create_embed()
     await ctx.send(embed=embed, view=view)
+
+
+@bot.command(name="adminlog", help="Admin: Add a log entry for a user")
+@is_admin()
+async def admin_log(ctx, member: discord.Member, *, message: str):
+    try:
+        user_id = str(member.id)
+        today = str(datetime.now(EST).date())
+
+        logs = load_logs()
+
+        if user_id not in logs:
+            logs[user_id] = {}
+
+        if today not in logs[user_id]:
+            logs[user_id][today] = []
+        elif isinstance(logs[user_id][today], str):
+            logs[user_id][today] = [{
+                "timestamp": "converted",
+                "log": logs[user_id][today]
+            }]
+
+        logs[user_id][today].append({
+            "timestamp": datetime.now(EST).isoformat(),
+            "log": message
+        })
+
+        save_logs(logs)
+
+        # Delete admin's command message
+        try:
+            await ctx.message.delete()
+        except discord.Forbidden:
+            print("[WARN] Couldn't delete admin message – missing permissions?")
+
+        # Send confirmation message impersonating the user (mention user, but bot sends)
+        await ctx.send(f"✅ {member.mention}'s log has been saved.")
+
+    except Exception as e:
+        error_embed = discord.Embed(title="❌ Command Error",
+                                    description=f"An error occurred: {e}",
+                                    color=COLORS["error"])
+        await ctx.send(embed=error_embed)
 
 
 @bot.command(name="viewlogs",
