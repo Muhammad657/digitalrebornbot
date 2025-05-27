@@ -864,6 +864,54 @@ def create_info_embed(title: str, description: str) -> discord.Embed:
                          color=COLORS["primary"])
 
 
+async def update_leaderboard_channel():
+    leaderboard_channel_id = 1376588983059873933 # Replace with actual channel ID
+    channel = bot.get_channel(leaderboard_channel_id)
+
+    if channel is None:
+        print(f"❌ Could not find leaderboard channel with ID {leaderboard_channel_id}")
+        return
+
+    # Load scores from file (or use bot.user_scores if you keep it up to date)
+    try:
+        with open("scores.json", "r") as f:
+            scores = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        scores = {}
+
+    leaderboard = []
+
+    for user_id, tasks in scores.items():
+        total = sum(task.get("points", 0) for task in tasks.values())
+        leaderboard.append((int(user_id), total, tasks))
+
+    leaderboard.sort(key=lambda x: x[1], reverse=True)
+
+    embed = discord.Embed(
+        title="🏆 Leaderboard - Top Contributors",
+        description="Here are the top contributors and their points:",
+        color=COLORS["highlight"]
+    )
+
+    for rank, (user_id, total, tasks) in enumerate(leaderboard[:10], start=1):
+        user = await bot.fetch_user(user_id)
+        task_lines = "\n".join(
+            f"• {task.get('description', tid)}: {task['points']} pts"
+            for tid, task in tasks.items()
+        )
+        embed.add_field(
+            name=f"{rank}. {user.display_name} — {total} pts",
+            value=task_lines or "No tasks yet",
+            inline=False
+        )
+
+    embed.set_footer(text=f"Total participants: {len(leaderboard)}")
+
+    # Purge existing messages and resend
+    await channel.purge(limit=5)
+    await channel.send(embed=embed)
+
+
 # ========== Scheduled Tasks ==========
 @tasks.loop(minutes=1)
 async def daily_log_reminder():
@@ -1549,46 +1597,45 @@ async def testreminder(ctx, task_id: int):
         color=COLORS["info"]
     )
     await ctx.send(embed=embed)
-    
-@bot.command(name="leaderboard", aliases=["lb"], help="Show the current leaderboard")
+@bot.command(name="leaderboard", help="Show the top users by total points")
 async def leaderboard(ctx):
-    if not hasattr(bot, 'user_scores') or not bot.user_scores:
-        embed = discord.Embed(
-            title="🏆 Leaderboard",
-            description="No scores yet! Complete tasks to earn points.",
-            color=COLORS["primary"])
-        return await ctx.send(embed=embed)
+    try:
+        with open("scores.json", "r") as f:
+            scores = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return await ctx.send("❌ No scores available yet.")
 
-    # Calculate total scores for each user
-    total_scores = {
-        user_id: sum(task_data.get("points", 0) for task_data in tasks.values())
-        for user_id, tasks in bot.user_scores.items()
-    }
+    leaderboard = []
 
-    # Sort users by total score (descending)
-    sorted_scores = sorted(total_scores.items(), key=lambda x: x[1], reverse=True)
+    for user_id, tasks in scores.items():
+        total = sum(task.get("points", 0) for task in tasks.values())
+        leaderboard.append((int(user_id), total, tasks))
 
-    embed = discord.Embed(title="🏆 Leaderboard - Top Contributors",
-                          color=COLORS["primary"])
+    if not leaderboard:
+        return await ctx.send("❌ No participants yet.")
 
-    # Show top 10 users with per-task breakdown
-    for rank, (user_id, total_score) in enumerate(sorted_scores[:10], 1):
-        member = ctx.guild.get_member(int(user_id))
-        name = member.display_name if member else f"User ID {user_id}"
+    leaderboard.sort(key=lambda x: x[1], reverse=True)
 
-        task_details = ""
-        for task_id, task_data in bot.user_scores[user_id].items():
-            desc = task_data.get("description") or task_id
-            pts = task_data.get("points", 0)
-            task_details += f"• {desc}: {pts} pts\n"
+    embed = discord.Embed(
+        title="🏆 Leaderboard - Top Contributors",
+        description="Here are the top contributors and their points:",
+        color=COLORS["highlight"]
+    )
 
+    for rank, (user_id, total, tasks) in enumerate(leaderboard[:10], start=1):
+        user = await bot.fetch_user(user_id)
+        task_lines = "\n".join(
+            f"• {task.get('description', task_id)}: {task['points']} pts"
+            for task_id, task in tasks.items()
+        )
         embed.add_field(
-            name=f"{rank}. {name} — {total_score} pts",
-            value=task_details.strip() or "No tasks completed yet",
+            name=f"{rank}. {user.display_name} — {total} pts",
+            value=task_lines or "No tasks yet",
             inline=False
         )
 
-    embed.set_footer(text=f"Total participants: {len(bot.user_scores)}")
+    embed.set_footer(text=f"Total participants: {len(leaderboard)}")
+
     await ctx.send(embed=embed)
 
 
@@ -1669,7 +1716,18 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int, *
         json.dump(scores, f, indent=2)
 
     if hasattr(bot, 'user_scores'):
-        bot.user_scores[user_id_str] = scores[user_id_str]
+    if new_points == 0:
+        bot.user_scores[user_id_str].pop(task_id, None)
+        # If user has no more tasks, optionally remove their entry entirely
+        if not bot.user_scores[user_id_str]:
+            bot.user_scores.pop(user_id_str, None)
+    else:
+        bot.user_scores[user_id_str][task_id] = {
+            "points": new_points,
+            "description": desc,
+            "notes": notes
+        }
+
 
     total_points = sum(task["points"] for task in scores[user_id_str].values())
 
@@ -1687,6 +1745,7 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int, *
     embed.set_footer(text=footer_text)
 
     await ctx.send(embed=embed)
+    await update_leaderboard_channel()
 
 @bot.command(name="forcework",
              help="Ping everyone who hasn't logged work today (Admin only)")
@@ -2096,6 +2155,7 @@ async def complete_task(ctx, task_id: int):
     await ctx.send(embed=embed)
 
     # Optional: refresh task channel view if you use a public board
+    await update_leaderboard_channel()
     await update_task_channel()
 
 
