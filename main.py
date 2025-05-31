@@ -18,7 +18,7 @@ from discord.ui import View, Button
 from flask import Flask
 import threading
 import shlex
-
+# saldfkjlsdkfjlskdjflksjdf
 app = Flask('')
 
 @app.route('/')
