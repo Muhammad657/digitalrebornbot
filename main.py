@@ -708,9 +708,9 @@ class LeaderboardView(discord.ui.View):
     def __init__(self, leaderboard_data: List[tuple], page_size: int = 5):
         super().__init__(timeout=60)
         self.leaderboard_data = leaderboard_data
-        self.page_size = page_size
+        self.page_size = 1  # Optional but clear
+        self.max_page = len(leaderboard_data) - 1
         self.current_page = 0
-        self.max_page = (len(leaderboard_data) - 1) // page_size  # Fixed calculation
 
     def create_embed(self) -> discord.Embed:
         user_id, total, tasks = self.leaderboard_data[self.current_page]
@@ -791,10 +791,14 @@ class HealthLogsView(discord.ui.View):
                 else:
                     embed.description += f"\n```\n{entry}\n```\n"
 
+        footer_date = date_obj.strftime('%m/%d/%Y')
+        now = datetime.now().strftime('%I:%M %p')
         embed.set_footer(
-            text=f"Page {self.current_page + 1}/{len(self.logs)} • {datetime.now().strftime('%m/%d/%Y %I:%M %p')}",
+            text=f"Page {self.current_page + 1}/{len(self.logs)} • {footer_date} • Today at {now}",
             icon_url="https://i.imgur.com/7W0MJXP.png"
         )
+
+
         return embed
 
     @discord.ui.button(label="◄ Previous", style=discord.ButtonStyle.secondary)
