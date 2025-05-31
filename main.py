@@ -2339,11 +2339,12 @@ async def complete_task(ctx, task_id: int):
     task_name = task.get("name") or task.get("description") or f"Task #{task_id}"
 
     # ✅ Award points with correct task name
+   # ✅ Award points with correct task name
     award_points(str(ctx.author.id), str(task_id), points, description=task_name)
 
-    # ✅ Save updated scores to file
-    with open("scores.json", "w") as f:
-        json.dump(bot.user_scores, f)
+# ✅ Update in-memory scores from the file
+    with open("scores.json", "r") as f:
+        bot.user_scores = json.load(f)
 
     # ✅ Show user their updated score (optional: customize how it's displayed)
     user_score = bot.user_scores.get(str(ctx.author.id), {})
