@@ -2620,32 +2620,56 @@ async def all_tasks(ctx):
 
     await ctx.send(embed=embed)
 
+import re
+from datetime import datetime, timedelta
+
 @bot.command(name="updatetask")
 async def update_task(ctx, *, args=None):
     if not args:
         embed = create_error_embed(
             "Invalid Format",
-            "Usage: `!updatetask <task_id> \"new description\" [today|tomorrow|YYYY-MM-DD] [HH:MM] [priority]`\n"
-            "Priority can be low, normal, or high."
+            "Usage: `!updatetask <task_id> \"new description\" [today|tomorrow|YYYY-MM-DD] [HH:MM] [priority|importance] [points]`\n"
+            "Priority can be low, normal, or high. Importance is 1-5. Points is a number."
         )
         return await ctx.send(embed=embed)
 
-    # Pattern: ID "description" [date] [time] [priority]
-    pattern = r'^(\d+)\s+"([^"]+)"(?:\s+(today|tomorrow|\d{4}-\d{2}-\d{2}))?(?:\s+(\d{2}:\d{2}))?(?:\s+(low|normal|high))?$'
+    # Regex pattern with groups:
+    # task_id "desc" [date] [time] [priority|importance] [points]
+    pattern = (
+        r'^(\d+)\s+"([^"]+)"'                           # task_id and description
+        r'(?:\s+(today|tomorrow|\d{4}-\d{2}-\d{2}))?'  # optional date
+        r'(?:\s+(\d{2}:\d{2}))?'                        # optional time
+        r'(?:\s+([a-zA-Z]+)\|(\d))?'                    # optional priority|importance
+        r'(?:\s+(\d+))?'                                # optional points
+        r'$'
+    )
+
     match = re.match(pattern, args.strip(), re.IGNORECASE)
 
     if not match:
         embed = create_error_embed(
             "Invalid Format",
-            "Usage: `!updatetask <task_id> \"new description\" [today|tomorrow|YYYY-MM-DD] [HH:MM] [priority]`"
+            "Usage: `!updatetask <task_id> \"new description\" [today|tomorrow|YYYY-MM-DD] [HH:MM] [priority|importance] [points]`\n"
+            "Example: !updatetask 1 \"Fix bot\" today 14:30 high|4 10"
         )
         return await ctx.send(embed=embed)
 
-    task_id_str, new_desc, date_word, time_str, priority = match.groups()
-    task_id = int(task_id_str)
-    priority = priority.lower() if priority else "normal"
+    (
+        task_id_str, new_desc, date_word, time_str,
+        priority_str, importance_str, points_str
+    ) = match.groups()
 
-    # Handle due date and time
+    task_id = int(task_id_str)
+    priority = priority_str.lower() if priority_str else "normal"
+    importance = int(importance_str) if importance_str else 1
+    points = int(points_str) if points_str else 0
+
+    # Validate importance range
+    if not (1 <= importance <= 5):
+        embed = create_error_embed("Invalid Importance", "Importance must be between 1 and 5.")
+        return await ctx.send(embed=embed)
+
+    # Handle due date/time
     due_iso = None
     if date_word:
         try:
@@ -2666,22 +2690,32 @@ async def update_task(ctx, *, args=None):
     # Update user-created tasks
     for creator_id, tasks in bot.user_tasks_created.items():
         if task_id in tasks:
-            tasks[task_id]['description'] = new_desc
-            tasks[task_id]['due_date'] = due_iso
-            tasks[task_id]['priority'] = priority
+            tasks[task_id].update({
+                'description': new_desc,
+                'due_date': due_iso,
+                'priority': priority,
+                'importance': importance,
+                'points': points
+            })
 
             embed = discord.Embed(title=f"✅ Task #{task_id} Updated", color=COLORS["success"])
             embed.add_field(name="Description", value=new_desc, inline=False)
             embed.add_field(name="Due Date", value=due_iso or "Not specified", inline=True)
             embed.add_field(name="Priority", value=priority.capitalize(), inline=True)
+            embed.add_field(name="Importance", value=str(importance), inline=True)
+            embed.add_field(name="Points", value=str(points), inline=True)
             return await ctx.send(embed=embed)
 
     # Update assigned tasks
     for assignee_id, tasks in bot.task_assignments.items():
         if task_id in tasks:
-            tasks[task_id]['description'] = new_desc
-            tasks[task_id]['due_date'] = due_iso
-            tasks[task_id]['priority'] = priority
+            tasks[task_id].update({
+                'description': new_desc,
+                'due_date': due_iso,
+                'priority': priority,
+                'importance': importance,
+                'points': points
+            })
 
             save_tasks(bot.task_assignments)
 
@@ -2689,10 +2723,13 @@ async def update_task(ctx, *, args=None):
             embed.add_field(name="Description", value=new_desc, inline=False)
             embed.add_field(name="Due Date", value=due_iso or "Not specified", inline=True)
             embed.add_field(name="Priority", value=priority.capitalize(), inline=True)
+            embed.add_field(name="Importance", value=str(importance), inline=True)
+            embed.add_field(name="Points", value=str(points), inline=True)
             return await ctx.send(embed=embed)
 
     embed = create_error_embed("Not Found", f"Task ID {task_id} not found in your tasks.")
     await ctx.send(embed=embed)
+
 
 @bot.command(name="commenttask",
              help="Add comment to a task: !commenttask <task ID> <comment>")
