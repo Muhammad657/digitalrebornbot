@@ -722,30 +722,14 @@ class LeaderboardView(discord.ui.View):
             for tid, task in tasks.items()
         ) or "No tasks yet"
 
-    embed = discord.Embed(
-        title=f"🏆 Leaderboard - Top {self.current_page + 1}",
-        description=f"**{display_name}** — **{total} pts**\n\n{task_lines}",
-        color=COLORS["highlight"]
-    )
-    embed.set_footer(text=f"Page {self.current_page + 1}/{len(self.leaderboard_data)}")
+        embed = discord.Embed(
+            title=f"🏆 Leaderboard - Top {self.current_page + 1}",
+            description=f"**{display_name}** — **{total} pts**\n\n{task_lines}",
+            color=COLORS["highlight"]
+        )
+        embed.set_footer(text=f"Page {self.current_page + 1}/{len(self.leaderboard_data)}")
     return embed
-
-        for rank, (user_id, total, tasks) in enumerate(page_data, start=start_idx+1):
-            user = bot.get_user(user_id)
-            display_name = user.display_name if user else f"User {user_id}"
-            task_lines = "\n".join(
-                f"• {task.get('description', tid)}: {task['points']} pts"
-                for tid, task in tasks.items()
-            )
-            embed.add_field(
-                name=f"{rank}. {display_name} — {total} pts",
-                value=task_lines or "No tasks yet",
-                inline=False
-            )
-
-        embed.set_footer(text=f"Page {self.current_page + 1}/{self.max_page + 1}")
-        return embed
-
+    
     @discord.ui.button(label="◄", style=discord.ButtonStyle.secondary)
     async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.current_page > 0:
