@@ -1484,7 +1484,7 @@ async def custom_help(ctx, command_name: str = None):
         "myscore": {
             "description": "View your current score and points breakdown",
             "syntax": "!myscore"
-        }
+        },
         "updatetask": {
             "description":
             "Update a task's details",
