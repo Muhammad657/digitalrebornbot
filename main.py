@@ -232,6 +232,27 @@ def award_points(user_id: str, task_id: str, points: int, description: str = "")
         bot.user_scores[user_id][task_id]["description"] = description
 
 
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        await ctx.send(f"❌ Command not found. Use `!help` for available commands.", delete_after=10)
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"❌ Missing required argument: {error.param.name}", delete_after=10)
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send(f"❌ Invalid argument: {str(error)}", delete_after=10)
+    elif isinstance(error, commands.CheckFailure):
+        pass  # Silent check failures are ignored
+    else:
+        error_embed = discord.Embed(
+            title="❌ Command Error",
+            description=f"An error occurred: {str(error)}",
+            color=COLORS["error"]
+        )
+        await ctx.send(embed=error_embed)
+        # Log the error for debugging
+        print(f"Error in command {ctx.command}: {error}", exc_info=True)
+
+
 def save_created_tasks(data):
     with open("created_tasks.json", "w") as f:
         json.dump(data, f, indent=4)
@@ -445,66 +466,62 @@ class TaskPaginatedView(discord.ui.View):
         self.tasks = list(tasks.items())
         self.user_id = user_id
         self.current_page = 0
-        self.tasks_per_page = 5
+        self.tasks_per_page = 1  # Show one task per page
 
     def create_embed(self) -> discord.Embed:
         member = bot.get_user(self.user_id)
-        start_idx = self.current_page * self.tasks_per_page
-        end_idx = start_idx + self.tasks_per_page
-        page_tasks = self.tasks[start_idx:end_idx]
+        task_id, task = self.tasks[self.current_page]
 
         embed = discord.Embed(
-            title=f"📋 {member.display_name}'s Tasks",
+            title=f"📋 {member.display_name}'s Task #{task_id}",
             color=COLORS["primary"]
         )
 
         now = datetime.now(EST)
-        for task_id, task in page_tasks:
-            status = task.get("status", "Pending")
-            due_date = None
-            if task.get("due_date"):
-                try:
-                    due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST)
-                    days_left = (due_date.date() - now.date()).days
-                    if status != "Completed":
-                        if days_left < 0:
-                            status = "Overdue"
-                        elif days_left == 0:
-                            status = "Due Today"
-                        elif days_left == 1:
-                            status = "Due Tomorrow"
-                except ValueError:
-                    pass
+        status = task.get("status", "Pending")
+        due_date = None
+        if task.get("due_date"):
+            try:
+                due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST)
+                days_left = (due_date.date() - now.date()).days
+                if status != "Completed":
+                    if days_left < 0:
+                        status = "Overdue"
+                    elif days_left == 0:
+                        status = "Due Today"
+                    elif days_left == 1:
+                        status = "Due Tomorrow"
+            except ValueError:
+                pass
 
-            importance = str(task.get("importance", "3"))
-            importance_title = {
-                "5": "Very High",
-                "4": "High",
-                "3": "Normal",
-                "2": "Low",
-                "1": "Very Low"
-            }.get(importance, "Normal")
+        importance = str(task.get("importance", "3"))
+        importance_title = {
+            "5": "Very High",
+            "4": "High",
+            "3": "Normal",
+            "2": "Low",
+            "1": "Very Low"
+        }.get(importance, "Normal")
 
-            emoji = {
-                "Completed": "✅",
-                "In Progress": "🔄",
-                "Pending": "⏳",
-                "Overdue": "🚨",
-                "Due Today": "⚠️",
-                "Due Tomorrow": "🔔"
-            }.get(status, "📝")
+        emoji = {
+            "Completed": "✅",
+            "In Progress": "🔄",
+            "Pending": "⏳",
+            "Overdue": "🚨",
+            "Due Today": "⚠️",
+            "Due Tomorrow": "🔔"
+        }.get(status, "📝")
 
-            task_line = (
-                f"{emoji} `#{task_id}` **{task['description']}**\n"
-                f"▸ Status: {status} | "
-                f"Due: {due_date.strftime('%b %d %H:%M') if due_date else 'No deadline'} | "
-                f"Priority: {task.get('priority', 'Normal').title()} | "
-                f"Importance: {importance_title}"
-            )
+        task_line = (
+            f"{emoji} **{task['description']}**\n"
+            f"▸ Status: {status}\n"
+            f"▸ Due: {due_date.strftime('%b %d %H:%M') if due_date else 'No deadline'}\n"
+            f"▸ Priority: {task.get('priority', 'Normal').title()}\n"
+            f"▸ Importance: {importance_title}"
+        )
 
-            embed.add_field(name="\u200b", value=task_line, inline=False)
-
-        embed.set_footer(text=f"Page {self.current_page + 1}/{(len(self.tasks) + self.tasks_per_page - 1) // self.tasks_per_page}")
+        embed.description = task_line
+        embed.set_footer(text=f"Task {self.current_page + 1}/{len(self.tasks)}")
         return embed
 
     @discord.ui.button(label="◄", style=discord.ButtonStyle.secondary)
@@ -517,12 +534,12 @@ class TaskPaginatedView(discord.ui.View):
 
     @discord.ui.button(label="►", style=discord.ButtonStyle.secondary)
     async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if (self.current_page + 1) * self.tasks_per_page < len(self.tasks):
+        if self.current_page + 1 < len(self.tasks):
             self.current_page += 1
             await interaction.response.edit_message(embed=self.create_embed(), view=self)
         else:
             await interaction.response.defer()
-
+            
 async def update_task_channel():
     channel = bot.get_channel(TASK_CHANNEL_ID)
     
@@ -693,7 +710,7 @@ class LeaderboardView(discord.ui.View):
         self.leaderboard_data = leaderboard_data
         self.page_size = page_size
         self.current_page = 0
-        self.max_page = (len(leaderboard_data) // page_size)  # Added the closing )
+        self.max_page = (len(leaderboard_data) - 1) // page_size  # Fixed calculation
 
     def create_embed(self) -> discord.Embed:
         start_idx = self.current_page * self.page_size
@@ -707,12 +724,13 @@ class LeaderboardView(discord.ui.View):
 
         for rank, (user_id, total, tasks) in enumerate(page_data, start=start_idx+1):
             user = bot.get_user(user_id)
+            display_name = user.display_name if user else f"User {user_id}"
             task_lines = "\n".join(
                 f"• {task.get('description', tid)}: {task['points']} pts"
                 for tid, task in tasks.items()
             )
             embed.add_field(
-                name=f"{rank}. {user.display_name} — {total} pts",
+                name=f"{rank}. {display_name} — {total} pts",
                 value=task_lines or "No tasks yet",
                 inline=False
             )
@@ -1779,6 +1797,36 @@ async def show_user_tasks(ctx, member: discord.Member = None, *args):
         for embed in embeds:
             await ctx.send(embed=embed)
 
+
+@bot.command(name="viewlogs", help="View your logs or another user's logs (admin only)")
+async def view_logs(ctx, member: discord.Member = None):
+    """View logs for yourself or another user (admin only)"""
+    target_member = member or ctx.author
+    
+    # Permission check
+    if target_member != ctx.author and ctx.author.id != ADMIN_ID:
+        embed = discord.Embed(
+            title="⛔ Access Denied",
+            description="You can only view your own logs unless you're an admin",
+            color=COLORS["error"]
+        )
+        return await ctx.send(embed=embed, delete_after=10)
+
+    logs = load_logs()
+    user_logs = logs.get(str(target_member.id), {})
+
+    if not user_logs:
+        embed = discord.Embed(
+            title="📭 No Logs Found",
+            description=f"{target_member.display_name} hasn't logged anything yet!",
+            color=COLORS["warning"]
+        )
+        return await ctx.send(embed=embed, view=LogButton())
+
+    # Create paginated view
+    view = HealthLogsView(target_member.id, user_logs)
+    embed = view.create_embed()
+    await ctx.send(embed=embed, view=view)
 
 @bot.command(name="testreminder")
 @is_admin()
