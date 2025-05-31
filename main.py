@@ -713,14 +713,22 @@ class LeaderboardView(discord.ui.View):
         self.max_page = (len(leaderboard_data) - 1) // page_size  # Fixed calculation
 
     def create_embed(self) -> discord.Embed:
-        start_idx = self.current_page * self.page_size
-        end_idx = start_idx + self.page_size
-        page_data = self.leaderboard_data[start_idx:end_idx]
+        user_id, total, tasks = self.leaderboard_data[self.current_page]
+        user = bot.get_user(user_id)
+        display_name = user.display_name if user else f"User {user_id}"
+    
+        task_lines = "\n".join(
+            f"• {task.get('description', tid)}: {task['points']} pts"
+            for tid, task in tasks.items()
+        ) or "No tasks yet"
 
-        embed = discord.Embed(
-            title="🏆 Leaderboard - Top Contributors",
-            color=COLORS["highlight"]
-        )
+    embed = discord.Embed(
+        title=f"🏆 Leaderboard - Top {self.current_page + 1}",
+        description=f"**{display_name}** — **{total} pts**\n\n{task_lines}",
+        color=COLORS["highlight"]
+    )
+    embed.set_footer(text=f"Page {self.current_page + 1}/{len(self.leaderboard_data)}")
+    return embed
 
         for rank, (user_id, total, tasks) in enumerate(page_data, start=start_idx+1):
             user = bot.get_user(user_id)
@@ -999,26 +1007,26 @@ def create_info_embed(title: str, description: str) -> discord.Embed:
 
 
 async def update_leaderboard_channel():
-    leaderboard_channel_id = 1376588983059873933  # Your leaderboard channel ID
+    leaderboard_channel_id = 1376588983059873933  # Replace with your actual channel ID
     channel = bot.get_channel(leaderboard_channel_id)
-    
+
     if channel is None:
         print(f"❌ Could not find leaderboard channel with ID {leaderboard_channel_id}")
         return
 
-    # Clear existing leaderboard messages
+    # 🧹 Clear existing leaderboard messages
     async for msg in channel.history(limit=10):
-        if msg.author == bot.user and msg.embeds and any(e.title.startswith("🏆") for e in msg.embeds):
+        if msg.author == bot.user and (msg.embeds or "Congratulations" in msg.content):
             await msg.delete()
 
-    # Load scores
+    # 📥 Load scores
     try:
         with open("scores.json", "r") as f:
             scores = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         scores = {}
 
-    # Prepare leaderboard data
+    # 📊 Prepare leaderboard data
     leaderboard_data = []
     for user_id, tasks in scores.items():
         total = sum(task.get("points", 0) for task in tasks.values())
@@ -1033,12 +1041,19 @@ async def update_leaderboard_channel():
         await channel.send(embed=embed)
         return
 
+    # 🔽 Sort from highest to lowest total points
     leaderboard_data.sort(key=lambda x: x[1], reverse=True)
 
-    # Create and send paginated view
+    # 📤 Create and send paginated leaderboard view
     view = LeaderboardView(leaderboard_data)
     embed = view.create_embed()
     await channel.send(embed=embed, view=view)
+
+    # 🎉 Congratulate Top 1 user in a separate message
+    top1_user_id = leaderboard_data[0][0]
+    top1_user = await bot.fetch_user(top1_user_id)
+    await channel.send(f"🎉 Congratulations to **{top1_user.display_name}** for being **Top 1** on the leaderboard!")
+
 
 # 3. Update LogModal to award points
 class LogModal(discord.ui.Modal, title="Log Your Work"):
@@ -2410,7 +2425,11 @@ async def complete_task(ctx, task_id: int):
         return await ctx.send(embed=embed)
 
     task = user_tasks[task_id]
+    if task.get("status") == "Completed":
+        embed = create_error_embed("Already Completed", f"Task #{task_id} has already been completed.")
+        return await ctx.send(embed=embed)
     task["status"] = "Completed"
+
     task["completed_at"] = str(datetime.now(EST))
     points = task.get("points", 10)
 
