@@ -439,6 +439,112 @@ def save_comments(comments: Dict[str, List[Dict]]):
 
 
 # ========== UI Components ==========
+class TaskPaginatedView(discord.ui.View):
+    def __init__(self, tasks: Dict[int, Dict], user_id: int):
+        super().__init__(timeout=60)
+        self.tasks = list(tasks.items())
+        self.user_id = user_id
+        self.current_page = 0
+        self.tasks_per_page = 5
+
+    def create_embed(self) -> discord.Embed:
+        member = bot.get_user(self.user_id)
+        start_idx = self.current_page * self.tasks_per_page
+        end_idx = start_idx + self.tasks_per_page
+        page_tasks = self.tasks[start_idx:end_idx]
+
+        embed = discord.Embed(
+            title=f"📋 {member.display_name}'s Tasks",
+            color=COLORS["primary"]
+        )
+
+        now = datetime.now(EST)
+        for task_id, task in page_tasks:
+            status = task.get("status", "Pending")
+            due_date = None
+            if task.get("due_date"):
+                try:
+                    due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST)
+                    days_left = (due_date.date() - now.date()).days
+                    if status != "Completed":
+                        if days_left < 0:
+                            status = "Overdue"
+                        elif days_left == 0:
+                            status = "Due Today"
+                        elif days_left == 1:
+                            status = "Due Tomorrow"
+                except ValueError:
+                    pass
+
+            importance = str(task.get("importance", "3"))
+            importance_title = {
+                "5": "Very High",
+                "4": "High",
+                "3": "Normal",
+                "2": "Low",
+                "1": "Very Low"
+            }.get(importance, "Normal")
+
+            emoji = {
+                "Completed": "✅",
+                "In Progress": "🔄",
+                "Pending": "⏳",
+                "Overdue": "🚨",
+                "Due Today": "⚠️",
+                "Due Tomorrow": "🔔"
+            }.get(status, "📝")
+
+            task_line = (
+                f"{emoji} `#{task_id}` **{task['description']}**\n"
+                f"▸ Status: {status} | "
+                f"Due: {due_date.strftime('%b %d %H:%M') if due_date else 'No deadline'} | "
+                f"Priority: {task.get('priority', 'Normal').title()} | "
+                f"Importance: {importance_title}"
+            )
+
+            embed.add_field(name="\u200b", value=task_line, inline=False)
+
+        embed.set_footer(text=f"Page {self.current_page + 1}/{(len(self.tasks) + self.tasks_per_page - 1) // self.tasks_per_page}")
+        return embed
+
+    @discord.ui.button(label="◄", style=discord.ButtonStyle.secondary)
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page > 0:
+            self.current_page -= 1
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
+        else:
+            await interaction.response.defer()
+
+    @discord.ui.button(label="►", style=discord.ButtonStyle.secondary)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if (self.current_page + 1) * self.tasks_per_page < len(self.tasks):
+            self.current_page += 1
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
+        else:
+            await interaction.response.defer()
+
+async def update_task_channel():
+    channel = bot.get_channel(TASK_CHANNEL_ID)
+    
+    # Clear existing task messages
+    async for msg in channel.history(limit=100):
+        if msg.author == bot.user and (msg.embeds or "Tasks" in msg.content):
+            await msg.delete()
+    
+    # Create paginated views for each user
+    for user_id, tasks in bot.task_assignments.items():
+        if not tasks:
+            continue
+            
+        member = await bot.fetch_user(int(user_id))
+        if not member:
+            continue
+            
+        view = TaskPaginatedView(tasks, user_id)
+        embed = view.create_embed()
+        await channel.send(embed=embed, view=view)
+
+
 class TaskCreationModal(discord.ui.Modal, title="Create New Task"):
 
     def __init__(self):
@@ -581,117 +687,126 @@ class LogsPaginatedView(discord.ui.View):
             embed = self.create_embed()
             await interaction.response.edit_message(embed=embed, view=self)
 
+class LeaderboardView(discord.ui.View):
+    def __init__(self, leaderboard_data: List[tuple], page_size: int = 5):
+        super().__init__(timeout=60)
+        self.leaderboard_data = leaderboard_data
+        self.page_size = page_size
+        self.current_page = 0
+        self.max_page = (len(leaderboard_data) // page_size
 
+    def create_embed(self) -> discord.Embed:
+        start_idx = self.current_page * self.page_size
+        end_idx = start_idx + self.page_size
+        page_data = self.leaderboard_data[start_idx:end_idx]
+
+        embed = discord.Embed(
+            title="🏆 Leaderboard - Top Contributors",
+            color=COLORS["highlight"]
+        )
+
+        for rank, (user_id, total, tasks) in enumerate(page_data, start=start_idx+1):
+            user = bot.get_user(user_id)
+            task_lines = "\n".join(
+                f"• {task.get('description', tid)}: {task['points']} pts"
+                for tid, task in tasks.items()
+            )
+            embed.add_field(
+                name=f"{rank}. {user.display_name} — {total} pts",
+                value=task_lines or "No tasks yet",
+                inline=False
+            )
+
+        embed.set_footer(text=f"Page {self.current_page + 1}/{self.max_page + 1}")
+        return embed
+
+    @discord.ui.button(label="◄", style=discord.ButtonStyle.secondary)
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page > 0:
+            self.current_page -= 1
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
+        else:
+            await interaction.response.defer()
+
+    @discord.ui.button(label="►", style=discord.ButtonStyle.secondary)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page < self.max_page:
+            self.current_page += 1
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
+        else:
+            await interaction.response.defer()
+
+
+# 1. Update HealthLogsView to properly handle logging
 class HealthLogsView(discord.ui.View):
-
-    def __init__(self, user_id: int, logs: Dict[str, str]):
+    def __init__(self, user_id: int, logs: Dict[str, List[Dict]]):
         super().__init__(timeout=180)
         self.user_id = user_id
-        self.logs = sorted(logs.items(), key=lambda x: x[0],
-                           reverse=True)  # Newest first
-        self.page = 0
-        self.max_per_page = 5
-        self.total_pages = max(1, (len(self.logs) + self.max_per_page - 1) //
-                               self.max_per_page)  # Fixed calculation
+        self.logs = sorted(
+            [(date, entries) for date, entries in logs.items()],
+            key=lambda x: x[0],
+            reverse=True
+        )
+        self.current_page = 0
+        self.logs_per_page = 1
 
-    def get_page_content(self):
-        start = self.page * self.max_per_page
-        end = start + self.max_per_page
-        page_logs = self.logs[start:end]
+    async def on_timeout(self):
+        # Disable buttons when view times out
+        for item in self.children:
+            item.disabled = True
 
-        desc = ""
-        for date, entries in page_logs:
+    def create_embed(self) -> discord.Embed:
+        member = bot.get_user(self.user_id)
+        embed = discord.Embed(
+            title=f"📊 Work Logs for {member.display_name if member else 'Unknown User'}",
+            color=COLORS["primary"],
+            timestamp=datetime.now(EST)
+        )
+        
+        if self.logs:
+            current_date, entries = self.logs[self.current_page]
             try:
-                # Format date
-                try:
-                    date_obj = datetime.strptime(date, "%Y-%m-%d")
-                    formatted_date = date_obj.strftime("%A, %B %d, %Y")
-                except ValueError:
-                    formatted_date = date
+                date_obj = datetime.strptime(current_date, "%Y-%m-%d").date()
+                formatted_date = date_obj.strftime("%A, %B %d, %Y")
+            except ValueError:
+                formatted_date = current_date
 
-                desc += "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-                desc += f"📅 **{formatted_date}**\n"
+            embed.description = f"📅 **{formatted_date}**\n"
+            
+            for entry in entries:
+                if isinstance(entry, dict):
+                    log_text = entry.get("log", "")
+                    timestamp = entry.get("timestamp", "")
+                    embed.description += f"\n```\n{log_text}\n```\n"
+                else:
+                    embed.description += f"\n```\n{entry}\n```\n"
 
-                # Ensure entries is a list of logs
-                if isinstance(entries, str):
-                    entries = [{"timestamp": "converted", "log": entries}]
-                elif isinstance(entries, dict) and "log" in entries:
-                    entries = [entries]
-
-                for entry in entries:
-                    desc += f"```\n{entry['log']}\n```\n"
-
-            except Exception as e:
-                print(f"Error formatting log {date}: {e}")
-                continue
-
-        return desc or "No logs to show."
+        embed.set_footer(
+            text=f"Page {self.current_page + 1}/{len(self.logs)} • {datetime.now().strftime('%m/%d/%Y %I:%M %p')}",
+            icon_url="https://i.imgur.com/7W0MJXP.png"
+        )
+        return embed
 
     @discord.ui.button(label="◄ Previous", style=discord.ButtonStyle.secondary)
-    async def previous_page(self, interaction: discord.Interaction,
-                            button: discord.ui.Button):
-        if self.page > 0:
-            self.page -= 1
-            embed = self.create_embed()
-            await interaction.response.edit_message(embed=embed, view=self)
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page > 0:
+            self.current_page -= 1
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
         else:
             await interaction.response.defer()
 
     @discord.ui.button(label="Next ►", style=discord.ButtonStyle.secondary)
-    async def next_page(self, interaction: discord.Interaction,
-                        button: discord.ui.Button):
-        if self.page < self.total_pages - 1:
-            self.page += 1
-            embed = self.create_embed()
-            await interaction.response.edit_message(embed=embed, view=self)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page < len(self.logs) - 1:
+            self.current_page += 1
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
         else:
             await interaction.response.defer()
 
-    @discord.ui.button(label="📝 Log Work",
-                       style=discord.ButtonStyle.primary,
-                       emoji="✏️")
-    async def log_work_button(self, interaction: discord.Interaction,
-                              button: discord.ui.Button):
+    @discord.ui.button(label="📝 Log Work", style=discord.ButtonStyle.primary, emoji="✏️")
+    async def log_work_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Send the log modal
         await interaction.response.send_modal(LogModal())
-
-    def create_embed(self):
-        member = bot.get_user(self.user_id)
-        embed = discord.Embed(
-            title=
-            f"📊 Work Logs for {member.display_name if member else 'Unknown User'}",
-            description=self.get_page_content(),
-            color=COLORS["primary"],
-            timestamp=datetime.now(EST))
-
-        if member and member.avatar:
-            embed.set_thumbnail(url=member.avatar.url)
-
-        embed.set_footer(
-            text=
-            f"Page {self.page + 1}/{self.total_pages} • {datetime.now().strftime('%m/%d/%Y %I:%M %p')}",
-            icon_url="https://i.imgur.com/7W0MJXP.png")
-        return embed
-
-
-
-
-@bot.event
-async def on_command_error(ctx, error):
-    # Ignore CheckFailure for admin commands (they're already handled silently)
-    if isinstance(error, commands.CheckFailure):
-        return
-
-    # Handle other errors normally
-    embed = discord.Embed(title="❌ Command Error", color=COLORS["error"])
-
-    if isinstance(error, commands.CommandNotFound):
-        embed.description = "Command not found. Type `!help` to see available commands."
-    elif isinstance(error, commands.MissingPermissions):
-        embed.description = "You don't have permission to use this command."
-    else:
-        embed.description = f"An error occurred: {str(error)}"
-
-    await ctx.send(embed=embed)
 
 
 class LogButton(discord.ui.View):
@@ -866,56 +981,104 @@ def create_info_embed(title: str, description: str) -> discord.Embed:
 
 
 async def update_leaderboard_channel():
-    leaderboard_channel_id = 1376588983059873933 # Replace with actual channel ID
+    leaderboard_channel_id = 1376588983059873933  # Your leaderboard channel ID
     channel = bot.get_channel(leaderboard_channel_id)
-
+    
     if channel is None:
         print(f"❌ Could not find leaderboard channel with ID {leaderboard_channel_id}")
         return
 
-    # Load scores from file (or use bot.user_scores if you keep it up to date)
+    # Clear existing leaderboard messages
+    async for msg in channel.history(limit=10):
+        if msg.author == bot.user and msg.embeds and any(e.title.startswith("🏆") for e in msg.embeds):
+            await msg.delete()
+
+    # Load scores
     try:
         with open("scores.json", "r") as f:
             scores = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         scores = {}
 
-    leaderboard = []
-
+    # Prepare leaderboard data
+    leaderboard_data = []
     for user_id, tasks in scores.items():
         total = sum(task.get("points", 0) for task in tasks.values())
-        leaderboard.append((int(user_id), total, tasks))
+        leaderboard_data.append((int(user_id), total, tasks))
 
-    leaderboard.sort(key=lambda x: x[1], reverse=True)
-
-    embed = discord.Embed(
-        title="🏆 Leaderboard - Top Contributors",
-        description="Here are the top contributors and their points:",
-        color=COLORS["highlight"]
-    )
-
-    for rank, (user_id, total, tasks) in enumerate(leaderboard[:10], start=1):
-        user = await bot.fetch_user(user_id)
-        task_lines = "\n".join(
-            f"• {task.get('description', tid)}: {task['points']} pts"
-            for tid, task in tasks.items()
+    if not leaderboard_data:
+        embed = discord.Embed(
+            title="🏆 Leaderboard",
+            description="No scores yet!",
+            color=COLORS["highlight"]
         )
-        embed.add_field(
-            name=f"{rank}. {user.display_name} — {total} pts",
-            value=task_lines or "No tasks yet",
-            inline=False
+        await channel.send(embed=embed)
+        return
+
+    leaderboard_data.sort(key=lambda x: x[1], reverse=True)
+
+    # Create and send paginated view
+    view = LeaderboardView(leaderboard_data)
+    embed = view.create_embed()
+    await channel.send(embed=embed, view=view)
+
+# 3. Update LogModal to award points
+class LogModal(discord.ui.Modal, title="Log Your Work"):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.add_item(
+            discord.ui.TextInput(
+                label="What did you work on?",
+                placeholder="Describe your work here...",
+                style=discord.TextStyle.long,
+                required=True,
+                max_length=1000
+            )
         )
 
-    embed.set_footer(text=f"Total participants: {len(leaderboard)}")
+    async def on_submit(self, interaction: discord.Interaction):
+        today = datetime.now(EST).date().isoformat()
+        log_entry = self.children[0].value
+        user_id = str(interaction.user.id)
 
-    # Purge existing messages and resend
-    async for msg in channel.history(limit=10):
-        if msg.author == bot.user:
-            await msg.delete()
-            break
-    await channel.send(embed=embed)
+        logs = load_logs()
 
+        if user_id not in logs:
+            logs[user_id] = {}
 
+        if today not in logs[user_id]:
+            logs[user_id][today] = []
+
+        # Normalize if old data
+        if isinstance(logs[user_id][today], str):
+            logs[user_id][today] = [{
+                "timestamp": "converted",
+                "log": logs[user_id][today]
+            }]
+        elif isinstance(logs[user_id][today], dict):
+            logs[user_id][today] = [logs[user_id][today]]
+
+        logs[user_id][today].append({
+            "timestamp": datetime.now(EST).isoformat(),
+            "log": log_entry
+        })
+
+        save_logs(logs)
+
+        # Award 2 points for daily logging
+        award_points(user_id, f"daily_log_{today}", 2, f"Completed log for {today}")
+
+        # Update leaderboard
+        await update_leaderboard_channel()
+
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="✅ Log Saved (+2 points)",
+                description="Your log has been saved and you earned 2 points!",
+                color=COLORS["success"]
+            ),
+            ephemeral=True
+        )
 # ========== Scheduled Tasks ==========
 @tasks.loop(minutes=1)
 async def daily_log_reminder():
@@ -951,42 +1114,62 @@ async def daily_log_reminder():
             embed.set_thumbnail(url="https://i.imgur.com/7W0MJXP.png")
             await channel.send(embed=embed, view=LogButton())
 
-
 @tasks.loop(minutes=1)
 async def send_summary_to_admin():
     await bot.wait_until_ready()
     now_est = datetime.now(EST)
     if now_est.time().hour == 0 and now_est.time().minute == 0:
-        # run your midnight job
-
         logs = load_logs()
         admin = bot.get_user(ADMIN_ID)
         if admin is None:
-            print("Admin user not found!")
             return
 
         if not logs:
-            embed = create_info_embed("Daily Summary", "No logs to show for today.")
+            embed = discord.Embed(
+                title="📊 Daily Summary",
+                description="No logs recorded today",
+                color=COLORS["info"]
+            )
             await admin.send(embed=embed)
-        else:
-            for user_id, user_log in logs.items():
-                user = bot.get_user(int(user_id))
-                mention = user.mention if user else f"<User ID: {user_id}>"
+            return
 
-                embed = discord.Embed(
-                    title=f"📊 Daily Logs Summary - {mention}",
-                    color=COLORS["primary"],
-                    timestamp=now_est
-                )
+        for user_id, user_logs in logs.items():
+            user = bot.get_user(int(user_id))
+            if not user:
+                continue
 
-                for date, desc in sorted(user_log.items(), reverse=True):
-                    embed.add_field(name=f"📅 {date}", value=desc, inline=False)
+            embed = discord.Embed(
+                title=f"📝 Daily Logs - {user.display_name}",
+                color=COLORS["primary"],
+                timestamp=now_est
+            )
+
+            today = datetime.now(EST).date().isoformat()
+            if today in user_logs:
+                entries = user_logs[today]
+                if isinstance(entries, str):
+                    entries = [{"log": entries}]
+                elif isinstance(entries, dict):
+                    entries = [entries]
+
+                log_text = ""
+                for entry in entries:
+                    if isinstance(entry, dict):
+                        timestamp = entry.get("timestamp", "")
+                        log = entry.get("log", "")
+                        log_text += f"**{timestamp}**\n{log}\n\n"
+                    else:
+                        log_text += f"{entry}\n\n"
+
+                if log_text:
+                    embed.add_field(
+                        name=f"📅 {today}",
+                        value=log_text,
+                        inline=False
+                    )
 
                 embed.set_footer(text="End of summary")
                 await admin.send(embed=embed)
-
-    # Reset logs
-    # save_logs({})
 
 @tasks.loop(minutes=60)  # Runs every hour
 async def evening_ping_task():
@@ -1230,10 +1413,6 @@ async def custom_help(ctx, command_name: str = None):
             "description": "Reset logs for a user or date",
             "syntax": "!resetlogs [@user] [date]"
         },
-        "completetask": {
-            "description": "Mark a task as completed",
-            "syntax": "!completetask <task_id>"
-        },
         "adjustpoints": {
             "description": "Adjust user points",
             "syntax": "!adjustpoints @member add/remove <amount>"
@@ -1249,7 +1428,14 @@ async def custom_help(ctx, command_name: str = None):
         "removetask": {
             "description": "Remove tasks from users",
             "syntax": "!removetask [@user] [task_id]"
-        }, 
+        },  "adminlog": {
+        "description": "Add a log entry for a user with optional date",
+        "syntax": "!adminlog @user [date] <message>"
+        },
+        "testreminder": {
+            "description": "Test task reminder system",
+            "syntax": "!testreminder <task_id>"
+        }
     }
 
     # Define regular commands
@@ -1278,6 +1464,7 @@ async def custom_help(ctx, command_name: str = None):
             "description": "Create a new task (form)",
             "syntax": "!createtask"
         },
+        
         "addtask": {
             "description": "Add a new task (command)",
             "syntax": "!addtask \"description\" [due_date] [priority] [points]"
@@ -1286,6 +1473,18 @@ async def custom_help(ctx, command_name: str = None):
             "description": "View your assigned tasks",
             "syntax": "!mytasks"
         },
+        "completetask": {
+            "description": "Mark a task as completed",
+            "syntax": "!completetask <task_id>"
+        },
+        "tasks": {
+            "description": "View your tasks with filtering options",
+            "syntax": "!tasks [filter] [sort]\nFilters: pending, completed, overdue\nSort: due, priority"
+        }, 
+        "myscore": {
+            "description": "View your current score and points breakdown",
+            "syntax": "!myscore"
+        }
         "updatetask": {
             "description":
             "Update a task's details",
@@ -1405,7 +1604,7 @@ async def custom_help(ctx, command_name: str = None):
                         f"`{cmd}`" for cmd in [
                             "createtask", "addtask", "mytasks", "updatetask",
                             "commenttask", "viewcomments", "searchtasks",
-                            "addcategory", "taskchart", "tasks"
+                            "addcategory", "taskchart", "tasks", "completetask",
                         ]
                     ]),
                     inline=False)
@@ -1601,7 +1800,7 @@ async def testreminder(ctx, task_id: int):
         color=COLORS["info"]
     )
     await ctx.send(embed=embed)
-@bot.command(name="leaderboard", help="Show the top users by total points")
+@bot.command(name="leaderboard")
 async def leaderboard(ctx):
     try:
         with open("scores.json", "r") as f:
@@ -1609,39 +1808,18 @@ async def leaderboard(ctx):
     except (FileNotFoundError, json.JSONDecodeError):
         return await ctx.send("❌ No scores available yet.")
 
-    leaderboard = []
-
+    leaderboard_data = []
     for user_id, tasks in scores.items():
         total = sum(task.get("points", 0) for task in tasks.values())
-        leaderboard.append((int(user_id), total, tasks))
+        leaderboard_data.append((int(user_id), total, tasks))
 
-    if not leaderboard:
+    if not leaderboard_data:
         return await ctx.send("❌ No participants yet.")
 
-    leaderboard.sort(key=lambda x: x[1], reverse=True)
-
-    embed = discord.Embed(
-        title="🏆 Leaderboard - Top Contributors",
-        description="Here are the top contributors and their points:",
-        color=COLORS["highlight"]
-    )
-
-    for rank, (user_id, total, tasks) in enumerate(leaderboard[:10], start=1):
-        user = await bot.fetch_user(user_id)
-        task_lines = "\n".join(
-            f"• {task.get('description', task_id)}: {task['points']} pts"
-            for task_id, task in tasks.items()
-        )
-        embed.add_field(
-            name=f"{rank}. {user.display_name} — {total} pts",
-            value=task_lines or "No tasks yet",
-            inline=False
-        )
-
-    embed.set_footer(text=f"Total participants: {len(leaderboard)}")
-
-    await ctx.send(embed=embed)
-
+    leaderboard_data.sort(key=lambda x: x[1], reverse=True)
+    view = LeaderboardView(leaderboard_data)
+    embed = view.create_embed()
+    await ctx.send(embed=embed, view=view)
 
 @bot.command(name="adjustpoints", help="Add or remove points from a user (Admin only)")
 @is_admin()
@@ -2494,12 +2672,56 @@ async def health(ctx, member: discord.Member = None):
     embed = view.create_embed()
     await ctx.send(embed=embed, view=view)
 
-
-@bot.command(name="adminlog", help="Admin: Add a log entry for a user")
+@bot.command(name="adminlog", help="Admin: Add a log entry for a user with optional date")
 @is_admin()
-async def admin_log(ctx, member: discord.Member, *, message: str):
+async def admin_log(ctx, member: discord.Member, date: Optional[str] = None, *, message: str):
     try:
         user_id = str(member.id)
+        log_date = parse_flexible_date(date) if date else str(datetime.now(EST).date())
+
+        logs = load_logs()
+
+        if user_id not in logs:
+            logs[user_id] = {}
+
+        if log_date not in logs[user_id]:
+            logs[user_id][log_date] = []
+        elif isinstance(logs[user_id][log_date], str):
+            logs[user_id][log_date] = [{
+                "timestamp": "converted",
+                "log": logs[user_id][log_date]
+            }]
+
+        logs[user_id][log_date].append({
+            "timestamp": datetime.now(EST).isoformat(),
+            "log": message
+        })
+
+        save_logs(logs)
+
+        # Award 2 points for logging
+        award_points(user_id, f"daily_log_{log_date}", 2, f"Completed log for {log_date}")
+
+        # Delete admin's command message
+        try:
+            await ctx.message.delete()
+        except discord.Forbidden:
+            pass
+
+        await ctx.send(f"✅ Log added for {member.mention} on {log_date} (+2 points)")
+
+    except Exception as e:
+        error_embed = discord.Embed(
+            title="❌ Command Error",
+            description=f"An error occurred: {e}",
+            color=COLORS["error"]
+        )
+        await ctx.send(embed=error_embed)
+
+@bot.command(name="log", help="Log your daily work (+2 points)")
+async def log(ctx, *, message: str):
+    try:
+        user_id = str(ctx.author.id)
         today = str(datetime.now(EST).date())
 
         logs = load_logs()
@@ -2522,68 +2744,23 @@ async def admin_log(ctx, member: discord.Member, *, message: str):
 
         save_logs(logs)
 
-        # Delete admin's command message
-        try:
-            await ctx.message.delete()
-        except discord.Forbidden:
-            print("[WARN] Couldn't delete admin message – missing permissions?")
+        # Award 2 points for daily logging
+        award_points(user_id, f"daily_log_{today}", 2, f"Completed log for {today}")
 
-        # Send confirmation message impersonating the user (mention user, but bot sends)
-        await ctx.send(f"✅ {member.mention}'s log has been saved.")
+        embed = discord.Embed(
+            title="✅ Log Saved (+2 points)",
+            description=f"Your work for {today} has been recorded!",
+            color=COLORS["success"]
+        )
+        await ctx.send(embed=embed)
 
     except Exception as e:
-        error_embed = discord.Embed(title="❌ Command Error",
-                                    description=f"An error occurred: {e}",
-                                    color=COLORS["error"])
+        error_embed = discord.Embed(
+            title="❌ Command Error",
+            description=f"An error occurred: {e}",
+            color=COLORS["error"]
+        )
         await ctx.send(embed=error_embed)
-
-
-@bot.command(name="viewlogs",
-             help="View your logs or another user's logs (admin only)")
-async def view_logs(ctx, member: discord.Member = None):
-    logs = load_logs()
-
-    # Determine whose logs to view
-    target = member or ctx.author
-    is_admin = ctx.author.id == ADMIN_ID
-
-    if target != ctx.author and not is_admin:
-        return await ctx.send(
-            "⛔ You don't have permission to view others' logs.")
-
-    user_logs = logs.get(str(target.id), {})
-    if not user_logs:
-        return await ctx.send("📭 No logs found.")
-
-    # Flatten logs into list of entries with date + log
-    entries = []
-    for date, log_list in sorted(user_logs.items(), reverse=True):
-        # Normalize log_list into a list of dicts
-        if isinstance(log_list, str):
-            log_list = [{"timestamp": "converted", "log": log_list}]
-        elif isinstance(log_list, dict):
-            log_list = [log_list]
-        elif isinstance(log_list, list):
-            new_list = []
-            for entry in log_list:
-                if isinstance(entry, str):
-                    new_list.append({"timestamp": "converted", "log": entry})
-                elif isinstance(entry, dict):
-                    new_list.append(entry)
-            log_list = new_list
-        else:
-            log_list = []
-
-        for log in log_list:
-            entries.append({"date": date, "log": log["log"]})
-
-    if not entries:
-        return await ctx.send("📭 No logs found.")
-
-    view = SingleLogPaginatedView(target, entries)
-    embed = view.create_embed()
-    return await ctx.send(embed=embed, view=view)
-
 
 @bot.command(name="resetlogs",
              help="""Reset logs for a user or date (admin only)
