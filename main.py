@@ -2346,7 +2346,7 @@ async def complete_task(ctx, task_id: int):
         json.dump(bot.user_scores, f)
 
     # ✅ Show user their updated score (optional: customize how it's displayed)
-    user_score = bot.user_scores[str(ctx.author.id)]
+    user_score = bot.user_scores.get(str(ctx.author.id), {})
     task_summary = "\n".join([
         f"• {data.get('description') or task_id}: {data.get('points', 0)} pts"
         for task_id, data in user_score.items()
