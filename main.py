@@ -211,25 +211,25 @@ async def cleanup_task_assignments():
     bot.task_assignments = merged_assignments
     save_tasks(bot.task_assignments)
 
-def award_points(user_id: str, task_id: str, points: int, description: str = ""):
-    if not hasattr(bot, 'user_scores'):
-        bot.user_scores = {}
+def award_points(user_id: str, task_id: str, points: int, description: str):
+    try:
+        with open("scores.json", "r") as f:
+            scores = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        scores = {}
 
-    if user_id not in bot.user_scores:
-        bot.user_scores[user_id] = {}
+    if user_id not in scores:
+        scores[user_id] = {}
 
-    if task_id not in bot.user_scores[user_id]:
-        bot.user_scores[user_id][task_id] = {
-            "points": 0,
-            "description": description or task_id,
-            "notes": []
+    # Prevent duplicate point awards
+    if task_id not in scores[user_id]:
+        scores[user_id][task_id] = {
+            "points": points,
+            "description": description
         }
 
-    bot.user_scores[user_id][task_id]["points"] += points
-
-    # Update description if provided (non-empty)
-    if description:
-        bot.user_scores[user_id][task_id]["description"] = description
+        with open("scores.json", "w") as f:
+            json.dump(scores, f, indent=4)
 
 
 @bot.event
