@@ -2744,10 +2744,12 @@ async def update_task(ctx, *, args=None):
         embed.add_field(name="Priority", value=priority.capitalize(), inline=True)
         embed.add_field(name="Importance", value=str(importance), inline=True)
         embed.add_field(name="Points", value=str(points), inline=True)
+        await update_task_channel();
         return await ctx.send(embed=embed)
     else:
         embed = create_error_embed("Not Found", f"Task ID {task_id} not found in your tasks.")
         await ctx.send(embed=embed)
+        
 
 
 
