@@ -2060,10 +2060,11 @@ class AllLogsPaginatedView(discord.ui.View):
         self.requester = requester
         self.user_logs = user_logs
         self.guild = guild
-        self.current_page = 0
+        self.current_page = 0  # User page
+        self.current_log_page = 0  # Log page for the current user
+        self.logs_per_page = 3
 
     async def on_timeout(self):
-        # Disable buttons when view times out
         for item in self.children:
             item.disabled = True
         try:
@@ -2082,18 +2083,22 @@ class AllLogsPaginatedView(discord.ui.View):
             timestamp=datetime.now(EST)
         )
 
-        # Sort logs by date (newest first)
+        # Paginate log entries by date
         sorted_dates = sorted(logs.items(), key=lambda x: x[0], reverse=True)
+        total_pages = (len(sorted_dates) + self.logs_per_page - 1) // self.logs_per_page
 
-        for date, entries in sorted_dates[:3]:  # Show up to 3 most recent dates
-            # Format date nicely
+        start = self.current_log_page * self.logs_per_page
+        end = start + self.logs_per_page
+        paged_dates = sorted_dates[start:end]
+
+        for date, entries in paged_dates:
             try:
                 date_obj = datetime.strptime(date, "%Y-%m-%d").date()
                 formatted_date = date_obj.strftime("%A, %B %d, %Y")
             except ValueError:
                 formatted_date = date
 
-            # Process entries
+            # Normalize log entry format
             if isinstance(entries, str):
                 entries = [{"log": entries}]
             elif isinstance(entries, dict):
@@ -2114,17 +2119,37 @@ class AllLogsPaginatedView(discord.ui.View):
                 inline=False
             )
 
-        # Add user info to footer
         embed.set_footer(
-            text=f"User ID: {user_id} • Page {self.current_page + 1}/{len(self.user_logs)}"
+            text=(
+                f"User ID: {user_id} • User Page {self.current_page + 1}/{len(self.user_logs)} • "
+                f"Log Page {self.current_log_page + 1}/{total_pages}"
+            )
         )
-
         return embed
+
+    @discord.ui.button(label="⬅ Logs", style=discord.ButtonStyle.secondary)
+    async def previous_logs(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_log_page > 0:
+            self.current_log_page -= 1
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
+        else:
+            await interaction.response.defer()
+
+    @discord.ui.button(label="Logs ➡", style=discord.ButtonStyle.secondary)
+    async def next_logs(self, interaction: discord.Interaction, button: discord.ui.Button):
+        _, logs = self.user_logs[self.current_page]
+        total_pages = (len(logs) + self.logs_per_page - 1) // self.logs_per_page
+        if self.current_log_page < total_pages - 1:
+            self.current_log_page += 1
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
+        else:
+            await interaction.response.defer()
 
     @discord.ui.button(label="◄ Previous User", style=discord.ButtonStyle.secondary)
     async def previous_user(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.current_page > 0:
             self.current_page -= 1
+            self.current_log_page = 0  # Reset logs page when changing user
             await interaction.response.edit_message(embed=self.create_embed(), view=self)
         else:
             await interaction.response.defer()
@@ -2133,37 +2158,32 @@ class AllLogsPaginatedView(discord.ui.View):
     async def next_user(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.current_page < len(self.user_logs) - 1:
             self.current_page += 1
+            self.current_log_page = 0  # Reset logs page when changing user
             await interaction.response.edit_message(embed=self.create_embed(), view=self)
         else:
             await interaction.response.defer()
 
     @discord.ui.button(label="Jump to User", style=discord.ButtonStyle.primary)
     async def jump_to_user(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Button to select a specific user from a dropdown"""
-        # Create a select menu with all users
         options = []
         for i, (user_id, _) in enumerate(self.user_logs):
             member = self.guild.get_member(int(user_id))
             label = member.display_name if member else f"User {user_id}"
-            options.append(
-                discord.SelectOption(
-                    label=label[:25],
-                    value=str(i),
-                    description=f"View {label}'s logs"
-                )
-            )
+            options.append(discord.SelectOption(
+                label=label[:25],
+                value=str(i),
+                description=f"View {label}'s logs"
+            ))
 
         select = discord.ui.Select(
             placeholder="Select a user...",
-            options=options[:25]  # Discord limits to 25 options
+            options=options[:25]
         )
 
         async def select_callback(interaction: discord.Interaction):
             self.current_page = int(select.values[0])
-            await interaction.response.edit_message(
-                embed=self.create_embed(),
-                view=self
-            )
+            self.current_log_page = 0  # Reset logs page
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
         select.callback = select_callback
         view = discord.ui.View()
@@ -2173,6 +2193,53 @@ class AllLogsPaginatedView(discord.ui.View):
             view=view,
             ephemeral=True
         )
+    @discord.ui.button(label="📅 Jump to Date", style=discord.ButtonStyle.primary)
+    async def jump_to_date(self, interaction: discord.Interaction, button: discord.ui.Button):
+    """Jump to a specific log date for the current user"""
+    _, logs = self.user_logs[self.current_page]
+        sorted_dates = sorted(logs.items(), key=lambda x: x[0], reverse=True)
+    
+        # Convert to pages
+        date_to_page = {
+            date: idx // self.logs_per_page
+            for idx, (date, _) in enumerate(sorted_dates)
+        }
+    
+        options = []
+        for date, page in date_to_page.items():
+            try:
+                date_obj = datetime.strptime(date, "%Y-%m-%d").date()
+                label = date_obj.strftime("%b %d, %Y")
+            except ValueError:
+                label = date
+            options.append(
+                discord.SelectOption(
+                    label=label,
+                    value=str(page),
+                    description=f"Jump to logs from {label}"
+                )
+            )
+    
+        select = discord.ui.Select(
+            placeholder="Select a date...",
+            options=options[:25]  # Discord max
+        )
+    
+        async def select_callback(interaction: discord.Interaction):
+            self.current_log_page = int(select.values[0])
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
+    
+        select.callback = select_callback
+    
+        view = discord.ui.View()
+        view.add_item(select)
+    
+        await interaction.response.send_message(
+            "Select a date to jump to:",
+            view=view,
+            ephemeral=True
+        )
+
 @bot.command(name="editlog", help="Edit your last log from a specific date")
 async def edit_log(ctx, date: str, *, new_desc: str):
     user_logs = load_logs()
