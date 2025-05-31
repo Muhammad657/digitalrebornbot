@@ -257,111 +257,48 @@ def save_created_tasks(data):
     with open("created_tasks.json", "w") as f:
         json.dump(data, f, indent=4)
 
-# async def update_task_channel():
-#     channel = bot.get_channel(TASK_CHANNEL_ID)
 
-#     def is_task_board(m):
-#         # Only delete messages that are task boards (not reminders)
-#         return (m.author == bot.user and m.embeds and any(
-#             embed.title.startswith("📋 ") and "Tasks" in embed.title
-#             for embed in m.embeds))
 
-#     await channel.purge(check=is_task_board)
+async def update_task_channel():
+    channel = bot.get_channel(TASK_CHANNEL_ID)
+    if not channel:
+        return
 
-#     comments = load_comments()
+    # Delete old task messages
+    def is_task_message(m):
+        return (m.author == bot.user and m.embeds and 
+                any("Tasks" in embed.title for embed in m.embeds))
 
-#     IMPORTANCE_COLORS = {
-#         "5": 0xFF0000,  # Very High
-#         "4": 0xFF4500,  # High
-#         "3": 0xFFD700,  # Normal
-#         "2": 0x90EE90,  # Low
-#         "1": 0xFFFFFF   # Very Low
-#     }
+    await channel.purge(check=is_task_message)
 
-#     STATUS_EMOJIS = {
-#         "Completed": "✅",
-#         "In Progress": "🔄",
-#         "Pending": "⏳",
-#         "Overdue": "🚨",
-#         "Due Today": "⚠️",
-#         "Due Tomorrow": "🔔"
-#     }
+    # Rebuild task list for each user
+    for user_id, tasks in bot.task_assignments.items():
+        if not tasks:
+            continue
 
-#     # Map user IDs to display names
-#     display_names = {}
-#     for user_id in bot.task_assignments.keys():
-#         try:
-#             member = await bot.fetch_user(int(user_id))
-#             display_names[user_id] = member.display_name
-#         except:
-#             display_names[user_id] = f"User {user_id}"
+        user = await bot.fetch_user(int(user_id))
+        if not user:
+            continue
 
-#     # Create one embed per user with all their tasks
-#     for user_id, tasks in bot.task_assignments.items():
-#         if not tasks:
-#             continue
+        embed = discord.Embed(
+            title=f"📋 {user.display_name}'s Tasks",
+            color=COLORS["primary"]
+        )
 
-#         display_name = display_names.get(user_id, f"User {user_id}")
-#         now = datetime.now(EST)
+        for task_id, task in tasks.items():
+            status = task.get("status", "Pending")
+            due_date = (datetime.fromisoformat(task["due_date"]).astimezone(EST) 
+                       if task.get("due_date") else None
+            desc = task.get("description", "No description")
+            
+            embed.add_field(
+                name=f"Task #{task_id} ({status})",
+                value=f"{desc}\nDue: {due_date.strftime('%Y-%m-%d %H:%M') if due_date else 'None'}",
+                inline=False
+            )
 
-#         embed = discord.Embed(
-#             title=f"📋 {display_name}'s Tasks",
-#             description=f"Last updated: {now.strftime('%Y-%m-%d %H:%M')}",
-#             color=0x5865F2  # default color, will update based on last task importance
-#         )
-
-#         last_task_importance = "3"  # default importance (Normal)
+        await channel.send(embed=embed)
         
-#         for task_id, task in tasks.items():
-#             due_date = None
-#             days_left = None
-
-#             if task.get("due_date"):
-#                 try:
-#                     due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST)
-#                     days_left = (due_date.date() - now.date()).days
-#                 except (ValueError, TypeError):
-#                     pass
-
-#             status = task.get("status", "Pending")
-#             if status != "Completed" and due_date:
-#                 if days_left < 0:
-#                     status = "Overdue"
-#                 elif days_left == 0:
-#                     status = "Due Today"
-#                 elif days_left == 1:
-#                     status = "Due Tomorrow"
-
-#             importance = str(task.get("importance", "3"))
-#             last_task_importance = importance  # keep updating, so last task importance is used for color
-
-#             importance_title = {
-#                 "5": "Very High",
-#                 "4": "High",
-#                 "3": "Normal",
-#                 "2": "Low",
-#                 "1": "Very Low"
-#             }.get(importance, "Normal")
-
-#             emoji = STATUS_EMOJIS.get(status, "📝")
-#             priority = task.get("priority", "Normal").title()
-
-#             task_line = (
-#                 f"{emoji} `#{task_id}` **{task['description']}**\n"
-#                 f"▸ Status: {status} | "
-#                 f"Due: {due_date.strftime('%b %d %H:%M') if due_date else 'No deadline'} | "
-#                 f"Priority: {priority} | "
-#                 f"Importance: {importance_title} | "
-#                 f"Comments: {len(comments.get(str(task_id), []))}"
-#             )
-
-#             embed.add_field(name="\u200b", value=task_line, inline=False)
-
-#         # Set embed color based on last task importance
-#         embed.color = IMPORTANCE_COLORS.get(last_task_importance, 0x5865F2)
-
-#         await channel.send(embed=embed)
-
 def get_user_lives(user_id):
     lives = load_lives()
     return lives.get(str(user_id), 3)
@@ -462,18 +399,34 @@ def save_comments(comments: Dict[str, List[Dict]]):
 # ========== UI Components ==========
 class TaskPaginatedView(discord.ui.View):
     def __init__(self, tasks: Dict[int, Dict], user_id: int):
-        super().__init__(timeout=60)
+        super().__init__(timeout=None)  # Never expires
         self.tasks = list(tasks.items())
         self.user_id = user_id
         self.current_page = 0
-        self.tasks_per_page = 1  # Show one task per page
 
+    # Assign custom_id to buttons (required for persistence)
+    @discord.ui.button(label="◄", style=discord.ButtonStyle.secondary, custom_id="task:prev")
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page > 0:
+            self.current_page -= 1
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
+        else:
+            await interaction.response.defer()
+
+    @discord.ui.button(label="►", style=discord.ButtonStyle.secondary, custom_id="task:next")
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page + 1 < len(self.tasks):
+            self.current_page += 1
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
+        else:
+            await interaction.response.defer()
+            
     def create_embed(self) -> discord.Embed:
         member = bot.get_user(self.user_id)
         task_id, task = self.tasks[self.current_page]
 
         embed = discord.Embed(
-            title=f"📋 {member.display_name}'s Task #{task_id}",
+            title=f"📋 {member.display_name if member else 'Unknown User'}'s Task #{task_id}",
             color=COLORS["primary"]
         )
 
@@ -523,44 +476,6 @@ class TaskPaginatedView(discord.ui.View):
         embed.description = task_line
         embed.set_footer(text=f"Task {self.current_page + 1}/{len(self.tasks)}")
         return embed
-
-    @discord.ui.button(label="◄", style=discord.ButtonStyle.secondary)
-    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.current_page > 0:
-            self.current_page -= 1
-            await interaction.response.edit_message(embed=self.create_embed(), view=self)
-        else:
-            await interaction.response.defer()
-
-    @discord.ui.button(label="►", style=discord.ButtonStyle.secondary)
-    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.current_page + 1 < len(self.tasks):
-            self.current_page += 1
-            await interaction.response.edit_message(embed=self.create_embed(), view=self)
-        else:
-            await interaction.response.defer()
-            
-async def update_task_channel():
-    channel = bot.get_channel(TASK_CHANNEL_ID)
-    
-    # Clear existing task messages
-    async for msg in channel.history(limit=100):
-        if msg.author == bot.user and (msg.embeds or "Tasks" in msg.content):
-            await msg.delete()
-    
-    # Create paginated views for each user
-    for user_id, tasks in bot.task_assignments.items():
-        if not tasks:
-            continue
-            
-        member = await bot.fetch_user(int(user_id))
-        if not member:
-            continue
-            
-        view = TaskPaginatedView(tasks, user_id)
-        embed = view.create_embed()
-        await channel.send(embed=embed, view=view)
-
 
 class TaskCreationModal(discord.ui.Modal, title="Create New Task"):
 
@@ -705,12 +620,27 @@ class LogsPaginatedView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self)
 
 class LeaderboardView(discord.ui.View):
-    def __init__(self, leaderboard_data: List[tuple], page_size: int = 5):
-        super().__init__(timeout=60)
+    def __init__(self, leaderboard_data: List[tuple]):
+        super().__init__(timeout=None)  # Never expires
         self.leaderboard_data = leaderboard_data
-        self.page_size = 1  # Optional but clear
-        self.max_page = len(leaderboard_data) - 1
         self.current_page = 0
+
+    # Assign custom_id to buttons
+    @discord.ui.button(label="◄", style=discord.ButtonStyle.secondary, custom_id="leaderboard:prev")
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page > 0:
+            self.current_page -= 1
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
+        else:
+            await interaction.response.defer()
+
+    @discord.ui.button(label="►", style=discord.ButtonStyle.secondary, custom_id="leaderboard:next")
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page < len(self.leaderboard_data) - 1:
+            self.current_page += 1
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
+        else:
+            await interaction.response.defer()
 
     def create_embed(self) -> discord.Embed:
         user_id, total, tasks = self.leaderboard_data[self.current_page]
@@ -729,22 +659,6 @@ class LeaderboardView(discord.ui.View):
         )
         embed.set_footer(text=f"Page {self.current_page + 1}/{len(self.leaderboard_data)}")
         return embed
-    
-    @discord.ui.button(label="◄", style=discord.ButtonStyle.secondary)
-    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.current_page > 0:
-            self.current_page -= 1
-            await interaction.response.edit_message(embed=self.create_embed(), view=self)
-        else:
-            await interaction.response.defer()
-
-    @discord.ui.button(label="►", style=discord.ButtonStyle.secondary)
-    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.current_page < self.max_page:
-            self.current_page += 1
-            await interaction.response.edit_message(embed=self.create_embed(), view=self)
-        else:
-            await interaction.response.defer()
 
 
 # 1. Update HealthLogsView to properly handle logging
@@ -1302,6 +1216,8 @@ async def on_ready():
     migrate_logs()  # Legacy migration (if needed)
     bot.user_lives = load_lives()
     bot.add_view(LogButton())  # Persistent buttons
+    bot.add_view(TaskPaginatedView([], 0))  # Dummy data (buttons will reload)
+    bot.add_view(LeaderboardView([]))       # Dummy data
 
     # --- Task Initialization ---
     bot.task_assignments = load_tasks()
