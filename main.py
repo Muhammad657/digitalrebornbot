@@ -2302,38 +2302,37 @@ async def add_task(ctx, *, args=None):
 @is_admin()
 async def assign_task(ctx, member: discord.Member, task_id: int):
     try:
-        # Find task in user_tasks_created
+        # Find the task without deleting it from the creator's list
         task_found = None
         for creator_id, tasks in bot.user_tasks_created.items():
             if task_id in tasks:
                 task_found = tasks[task_id]
-                del tasks[task_id]  # Remove from created tasks
-                if not tasks:  # Clean up empty dicts
-                    del bot.user_tasks_created[creator_id]
-                break
-                
+                break  # Do not delete the original task
+
         if not task_found:
             return await ctx.send("❌ Task not found.")
             
-        # Add to assignments
+        if task_id in bot.task_assignments.get(member.id, {}):
+            return await ctx.send("⚠️ This task is already assigned to that user.")
+
+        # Add to assignee's task list
         if member.id not in bot.task_assignments:
             bot.task_assignments[member.id] = {}
-            
+
         bot.task_assignments[member.id][task_id] = {
             **task_found,
             "status": "Pending",
             "assigned_at": datetime.now(EST).isoformat(),
             "assigned_by": ctx.author.id
         }
-        
+
         save_tasks(bot.task_assignments)
-        save_created_tasks(bot.user_tasks_created)
-        
         await ctx.send(f"✅ Task #{task_id} assigned to {member.mention}")
         await update_task_channel()
-        
+
     except Exception as e:
         await ctx.send(f"❌ Error assigning task: {e}")
+
 
 @bot.command(name="completetask", help="Mark a task as completed")
 async def complete_task(ctx, task_id: int):
