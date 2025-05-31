@@ -287,15 +287,15 @@ async def update_task_channel():
 
         for task_id, task in tasks.items():
             status = task.get("status", "Pending")
-            due_date = (datetime.fromisoformat(task["due_date"]).astimezone(EST))
-            if task.get("due_date") else None
+            due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST) if task.get("due_date") else None
             desc = task.get("description", "No description")
             
             embed.add_field(
                 name=f"Task #{task_id} ({status})",
                 value=f"{desc}\nDue: {due_date.strftime('%Y-%m-%d %H:%M') if due_date else 'None'}",
                 inline=False
-            )
+        )
+
 
         await channel.send(embed=embed)
         
