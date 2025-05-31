@@ -728,7 +728,7 @@ class LeaderboardView(discord.ui.View):
             color=COLORS["highlight"]
         )
         embed.set_footer(text=f"Page {self.current_page + 1}/{len(self.leaderboard_data)}")
-    return embed
+        return embed
     
     @discord.ui.button(label="◄", style=discord.ButtonStyle.secondary)
     async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
