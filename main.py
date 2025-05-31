@@ -2195,8 +2195,9 @@ class AllLogsPaginatedView(discord.ui.View):
         )
     @discord.ui.button(label="📅 Jump to Date", style=discord.ButtonStyle.primary)
     async def jump_to_date(self, interaction: discord.Interaction, button: discord.ui.Button):
-    """Jump to a specific log date for the current user"""
-    _, logs = self.user_logs[self.current_page]
+        """Jump to a specific log date for the current user"""
+        _, logs = self.user_logs[self.current_page]
+    
         sorted_dates = sorted(logs.items(), key=lambda x: x[0], reverse=True)
     
         # Convert to pages
