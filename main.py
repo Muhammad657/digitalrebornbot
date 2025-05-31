@@ -674,11 +674,13 @@ class LogsPaginatedView(discord.ui.View):
 class LeaderboardView(discord.ui.View):
     def __init__(self, leaderboard_data: List[tuple]):
         super().__init__(timeout=None)
-        self.leaderboard_data = leaderboard_data
+        self.leaderboard_data = leaderboard_data  # (rank, user_id, total, tasks)
         self.current_page = 0
+
     @classmethod
     async def create_persistent_views(cls):
         bot.add_view(cls([])) 
+
     @discord.ui.button(label="◄", style=discord.ButtonStyle.secondary, custom_id="leaderboard:prev")
     async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.current_page > 0:
@@ -696,26 +698,18 @@ class LeaderboardView(discord.ui.View):
             await interaction.response.defer()
 
     def create_embed(self) -> discord.Embed:
-        user_id, total, tasks = self.leaderboard_data[self.current_page]
+        rank, user_id, total, tasks = self.leaderboard_data[self.current_page]
         user = bot.get_user(user_id)
         display_name = user.display_name if user else f"User {user_id}"
         avatar_url = user.display_avatar.url if user else discord.Embed.Empty
 
         embed = discord.Embed(
-            title=f"🏅 Leaderboard — Rank #{self.current_page + 1}",
+            title=f"🏅 Leaderboard — Rank #{rank}",
             color=COLORS["highlight"]
         )
 
-        embed.add_field(
-            name="👤 User",
-            value=f"**{display_name}** (`{user_id}`)",
-            inline=False
-        )
-        embed.add_field(
-            name="⭐ Total Points",
-            value=f"`{total}` pts",
-            inline=False
-        )
+        embed.add_field(name="👤 User", value=f"**{display_name}** (`{user_id}`)", inline=False)
+        embed.add_field(name="⭐ Total Points", value=f"`{total}` pts", inline=False)
 
         if tasks:
             task_lines = "\n".join(
@@ -725,18 +719,12 @@ class LeaderboardView(discord.ui.View):
         else:
             task_lines = "*No completed tasks yet.*"
 
-        embed.add_field(
-            name="📋 Completed Tasks",
-            value=task_lines,
-            inline=False
-        )
-
+        embed.add_field(name="📋 Completed Tasks", value=task_lines, inline=False)
         embed.set_footer(text=f"Page {self.current_page + 1} / {len(self.leaderboard_data)}")
         if avatar_url:
             embed.set_thumbnail(url=avatar_url)
 
         return embed
-
 
 
 # 1. Update HealthLogsView to properly handle logging
@@ -1006,7 +994,7 @@ async def update_leaderboard_channel():
     except (FileNotFoundError, json.JSONDecodeError):
         scores = {}
 
-    # 📊 Prepare leaderboard data
+    # 📊 Prepare leaderboard data with total scores
     leaderboard_data = []
     for user_id, tasks in scores.items():
         total = sum(task.get("points", 0) for task in tasks.values())
@@ -1021,18 +1009,35 @@ async def update_leaderboard_channel():
         await channel.send(embed=embed)
         return
 
-    # 🔽 Sort from highest to lowest total points
+    # 🔽 Sort and assign ranks with tie handling
     leaderboard_data.sort(key=lambda x: x[1], reverse=True)
 
+    ranked_leaderboard = []
+    last_score = None
+    rank = 0
+    skip = 1
+    for i, (user_id, total, tasks) in enumerate(leaderboard_data):
+        if total != last_score:
+            rank += skip
+            skip = 1
+        else:
+            skip += 1
+        last_score = total
+        ranked_leaderboard.append((rank, user_id, total, tasks))
+
     # 📤 Create and send paginated leaderboard view
-    view = LeaderboardView(leaderboard_data)
+    view = LeaderboardView(ranked_leaderboard)
     embed = view.create_embed()
     await channel.send(embed=embed, view=view)
 
-    # 🎉 Congratulate Top 1 user in a separate message
-    top1_user_id = leaderboard_data[0][0]
-    top1_user = await bot.fetch_user(top1_user_id)
-    await channel.send(f"🎉 Congratulations to **{top1_user.display_name}** for being **Top 1** on the leaderboard!")
+    # 🎉 Congratulate all Top 1 users
+    top1_users = [uid for r, uid, _, _ in ranked_leaderboard if r == 1]
+    mentions = []
+    for uid in top1_users:
+        user = await bot.fetch_user(uid)
+        mentions.append(f"**{user.display_name}**")
+    await channel.send(f"🎉 Congratulations to {', '.join(mentions)} for being **Top 1** on the leaderboard!")
+
 
 
 # 3. Update LogModal to award points
