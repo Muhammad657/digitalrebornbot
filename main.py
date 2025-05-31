@@ -367,29 +367,28 @@ async def update_task_channel():
         print("❌ Task channel not found.")
         return
 
-    def is_task_message(m):
-        return (
-            m.author == bot.user and m.embeds and any(
-                embed.title and "Task #" in embed.title for embed in m.embeds
-            )
-        )
-
-    # Purge up to 100 recent bot task messages
-    await channel.purge(limit=100, check=is_task_message)
-
     for user_id, tasks in bot.task_assignments.items():
         if not tasks:
             continue
 
-        # Send one paginated message per user
-        filtered_tasks = {tid: t for tid, t in tasks.items()}
+        # Delete old message for that user if exists
+        old_message = bot.task_message_refs.get(user_id)
+        if old_message:
+            try:
+                await old_message.delete()
+            except discord.NotFound:
+                pass  # Already deleted
+            except Exception as e:
+                print(f"Error deleting old message for user {user_id}: {e}")
 
-        view = TaskPaginatedView(filtered_tasks, user_id, label="All Tasks")
+        # Create new paginated view for this user
+        view = TaskPaginatedView(tasks, user_id, label="All Tasks")
         embed = view.create_embed()
         try:
-            await channel.send(embed=embed, view=view)
+            new_message = await channel.send(embed=embed, view=view)
+            bot.task_message_refs[user_id] = new_message
         except Exception as e:
-            print(f"Failed to send task message for user {user_id}: {e}")
+            print(f"Error sending new task message for user {user_id}: {e}")
             
 
 import discord
@@ -1301,6 +1300,7 @@ async def on_ready():
     bot.task_assignments = load_tasks()
     bot.user_tasks_created = {}
     bot.comments = load_comments()
+    bot.task_message_refs = {}  # user_id -> message object
 
     # Debug: Print loaded tasks to verify due dates
     print(f"\n[Task Debug] Loaded {len(bot.task_assignments)} users with tasks:")
