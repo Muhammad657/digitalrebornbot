@@ -258,54 +258,6 @@ def save_created_tasks(data):
         json.dump(data, f, indent=4)
 
 
-
-async def update_task_channel():
-    channel = bot.get_channel(TASK_CHANNEL_ID)
-    if not channel:
-        return
-    # Delete old task messages
-    def is_task_message(m):
-        return m.author == bot.user and m.embeds and any(
-            embed.title and any(kw in embed.title for kw in ["Pending", "Completed", "Overdue"]) for embed in m.embeds
-        )
-
-    await channel.purge(check=is_task_message)
-
-    # Send paginated views grouped by status per user
-    for user_id, tasks in bot.task_assignments.items():
-        if not tasks:
-            continue
-
-        # Sort tasks by status
-        categorized = {"Pending": {}, "Completed": {}, "Overdue": {}}
-        now = datetime.now(EST)
-
-        for task_id, task in tasks.items():
-            status = task.get("status", "Pending")
-            if status == "Completed":
-                categorized["Completed"][task_id] = task
-            else:
-                due_date = None
-                if task.get("due_date"):
-                    try:
-                        due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST)
-                        if due_date < now:
-                            categorized["Overdue"][task_id] = task
-                        else:
-                            categorized["Pending"][task_id] = task
-                    except ValueError:
-                        categorized["Pending"][task_id] = task
-                else:
-                    categorized["Pending"][task_id] = task
-
-        for label, filtered_tasks in categorized.items():
-            if not filtered_tasks:
-                continue
-
-            view = TaskPaginatedView(filtered_tasks, user_id, label)
-            embed = view.create_embed()
-            await channel.send(embed=embed, view=view)
-
         
 def get_user_lives(user_id):
     lives = load_lives()
@@ -406,37 +358,47 @@ def save_comments(comments: Dict[str, List[Dict]]):
 
 # ========== UI Components ==========
 async def update_task_channel():
-    task_channel_id = 1234567890  # Replace with your actual channel ID
-    channel = bot.get_channel(task_channel_id)
-    if channel is None:
-        print("❌ Could not find task channel.")
+    # Use correct, consistent source
+    channel = bot.get_channel(TASK_CHANNEL_ID)
+    if not channel:
+        print("❌ Task channel not found.")
         return
 
-    await channel.purge(limit=10, check=lambda m: m.author == bot.user)
+    # Delete old messages
+    def is_task_message(m):
+        return m.author == bot.user and m.embeds and any(
+            embed.title and any(kw in embed.title for kw in ["Pending", "Completed", "Overdue"]) 
+            for embed in m.embeds
+        )
+    await channel.purge(check=is_task_message)
 
-    for user_id, tasks in bot.user_tasks_created.items():
-        categorized = {"Completed": {}, "Pending": {}, "Overdue": {}}
+    # Use consistent task source
+    for user_id, tasks in bot.task_assignments.items():
+        if not tasks:
+            continue
+
+        categorized = {"Pending": {}, "Completed": {}, "Overdue": {}}
         now = datetime.now(EST)
 
         for task_id, task in tasks.items():
             status = task.get("status", "Pending")
+            due_date = None
+            if task.get("due_date"):
+                try:
+                    due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST)
+                except ValueError:
+                    pass
+
             if status == "Completed":
                 categorized["Completed"][task_id] = task
+            elif due_date and due_date < now:
+                categorized["Overdue"][task_id] = task
             else:
-                due_date = None
-                if task.get("due_date"):
-                    try:
-                        due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST)
-                    except ValueError:
-                        pass
-                if due_date and due_date < now:
-                    categorized["Overdue"][task_id] = task
-                else:
-                    categorized["Pending"][task_id] = task
+                categorized["Pending"][task_id] = task
 
-        for status_label, filtered_tasks in categorized.items():
+        for label, filtered_tasks in categorized.items():
             if filtered_tasks:
-                view = TaskPaginatedView(filtered_tasks, user_id, label=status_label)
+                view = TaskPaginatedView(filtered_tasks, user_id, label)
                 embed = view.create_embed()
                 await channel.send(embed=embed, view=view)
 
@@ -1558,23 +1520,12 @@ async def custom_help(ctx, command_name: str = None):
 @bot.command(name="tasks", help="Show your tasks (admins can check others)")
 @commands.guild_only()
 async def show_user_tasks(ctx, member: discord.Member = None, *args):
-    """
-    Usage:
-    - !tasks
-    - !tasks @User
-    - !tasks @User pending
-    - !tasks @User all priority
-    - !tasks overdue due
-    """
-
-    # Admins can view others' tasks, regular users can only view their own
-    filter_options = {"pending", "completed", "overdue", "all"}
-    sort_options = {"due", "priority"}
-
-    # Determine target user and args
+    # Determine user (same logic as you have)
     target_member = ctx.author
     filter_arg = None
     sort_arg = None
+    filter_options = {"pending", "completed", "overdue", "all"}
+    sort_options = {"due", "priority"}
 
     if member and isinstance(member, discord.Member):
         if not is_admin()(ctx) and member != ctx.author:
@@ -1587,7 +1538,7 @@ async def show_user_tasks(ctx, member: discord.Member = None, *args):
             sort_arg = args[1].lower()
     else:
         if isinstance(member, str):
-            args = (member,) + args  # shift args
+            args = (member,) + args
         if args:
             filter_arg = args[0].lower()
         if len(args) > 1:
@@ -1607,9 +1558,9 @@ async def show_user_tasks(ctx, member: discord.Member = None, *args):
         return
 
     now = datetime.now(EST)
-    pending_tasks = []
-    completed_tasks = []
-    overdue_tasks = []
+
+    # Collect filtered tasks in dict format {task_id: task}
+    filtered_tasks = {}
 
     for task_id, task in bot.task_assignments[user_id].items():
         status = task.get("status", "Pending")
@@ -1620,86 +1571,54 @@ async def show_user_tasks(ctx, member: discord.Member = None, *args):
             except ValueError:
                 due_date = None
 
-        task_data = (task_id, task, due_date)
+        # Apply filter_arg
+        if filter_arg in (None, "all"):
+            add_task = True
+        elif filter_arg == "pending" and status == "Pending" and (not due_date or due_date >= now):
+            add_task = True
+        elif filter_arg == "completed" and status == "Completed":
+            add_task = True
+        elif filter_arg == "overdue" and status != "Completed" and due_date and due_date < now:
+            add_task = True
+        else:
+            add_task = False
 
-        if status == "Completed":
-            completed_tasks.append(task_data)
-        elif status == "Pending":
-            if due_date and due_date < now:
-                overdue_tasks.append(task_data)
-            else:
-                pending_tasks.append(task_data)
+        if add_task:
+            filtered_tasks[task_id] = task
 
-    # Combine tasks based on filter
-    task_sections = []
+    if not filtered_tasks:
+        await ctx.send(f"{target_member.mention} has no tasks matching that filter.")
+        return
 
-    if filter_arg in (None, "all"):
-        task_sections = [
-            ("📝 Pending Tasks", COLORS["info"], pending_tasks),
-            ("✅ Completed Tasks", COLORS["success"], completed_tasks),
-            ("🚨 Overdue Tasks", COLORS["error"], overdue_tasks),
-        ]
-    else:
-        filter_map = {
-            "pending": ("📝 Pending Tasks", COLORS["info"], pending_tasks),
-            "completed": ("✅ Completed Tasks", COLORS["success"], completed_tasks),
-            "overdue": ("🚨 Overdue Tasks", COLORS["error"], overdue_tasks),
-        }
-        task_sections = [filter_map[filter_arg]]
-
-    # Apply sorting
-    def sort_key_due(task_data):
-        _, _, due = task_data
+    # Sort filtered tasks by your sort_arg
+    def sort_key_due(item):
+        tid, t = item
+        due = None
+        if "due_date" in t and t["due_date"]:
+            try:
+                due = datetime.fromisoformat(t["due_date"]).astimezone(EST)
+            except ValueError:
+                pass
         return due or datetime.max
 
-    def sort_key_priority(task_data):
+    def sort_key_priority(item):
+        tid, t = item
         priority_order = {"high": 0, "normal": 1, "low": 2}
-        return priority_order.get(task_data[1].get("priority", "Normal").lower(), 1)
+        return priority_order.get(t.get("priority", "normal").lower(), 1)
 
+    items = list(filtered_tasks.items())
     if sort_arg == "due":
-        for i in range(len(task_sections)):
-            task_sections[i] = (
-                task_sections[i][0],  # Title
-                task_sections[i][1],  # Color
-                sorted(task_sections[i][2], key=sort_key_due)
-            )
+        items.sort(key=sort_key_due)
     elif sort_arg == "priority":
-        for i in range(len(task_sections)):
-            task_sections[i] = (
-                task_sections[i][0],
-                task_sections[i][1],
-                sorted(task_sections[i][2], key=sort_key_priority)
-            )
+        items.sort(key=sort_key_priority)
 
-    # Build and send embeds
-    embeds = []
-    for title, color, task_list in task_sections:
-        if not task_list:
-            continue
-        embed = discord.Embed(title=f"{title} ({len(task_list)})", color=color)
-        for task_id, task, due_date in task_list:
-            desc = task.get("description", "Untitled")
-            priority = str(task.get("priority", "Normal")).title()
-            due_str = due_date.strftime('%b %d, %H:%M') if due_date else 'No deadline'
-            if title.startswith("✅"):
-                value = f"~~{desc}~~"
-            else:
-                importance = str(task.get("importance", "1")).title()
-                value = (
-                    f"**{desc}**\n"
-                    f"⏰ Due: {due_str}\n"
-                    f"🔮 Priority: {priority} | ❗ Importance: {importance}"
-                )
+    sorted_tasks = dict(items)
 
-            embed.add_field(name=f"Task #{task_id}", value=value, inline=False)
-        embeds.append(embed)
+    # Create paginated view — assuming your TaskPaginatedView accepts a dict of tasks, user_id, and a label
+    view = TaskPaginatedView(sorted_tasks, user_id, label=filter_arg or "all")
+    embed = view.create_embed()
 
-    if not embeds:
-        await ctx.send(f"{target_member.mention} has no tasks matching that filter.")
-    else:
-        await ctx.send(f"📋 Task summary for {target_member.mention}:")
-        for embed in embeds:
-            await ctx.send(embed=embed)
+    await ctx.send(embed=embed, view=view)
 
 
 @bot.command(name="viewlogs", help="View your logs or another user's logs (admin only)")
