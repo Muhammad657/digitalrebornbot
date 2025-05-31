@@ -621,11 +621,10 @@ class LogsPaginatedView(discord.ui.View):
 
 class LeaderboardView(discord.ui.View):
     def __init__(self, leaderboard_data: List[tuple]):
-        super().__init__(timeout=None)  # Never expires
+        super().__init__(timeout=None)
         self.leaderboard_data = leaderboard_data
         self.current_page = 0
 
-    # Assign custom_id to buttons
     @discord.ui.button(label="◄", style=discord.ButtonStyle.secondary, custom_id="leaderboard:prev")
     async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.current_page > 0:
@@ -646,19 +645,44 @@ class LeaderboardView(discord.ui.View):
         user_id, total, tasks = self.leaderboard_data[self.current_page]
         user = bot.get_user(user_id)
         display_name = user.display_name if user else f"User {user_id}"
-    
-        task_lines = "\n".join(
-            f"• {task.get('description', tid)}: {task['points']} pts"
-            for tid, task in tasks.items()
-        ) or "No tasks yet"
+        avatar_url = user.display_avatar.url if user else discord.Embed.Empty
 
         embed = discord.Embed(
-            title=f"🏆 Leaderboard - Top {self.current_page + 1}",
-            description=f"**{display_name}** — **{total} pts**\n\n{task_lines}",
+            title=f"🏅 Leaderboard — Rank #{self.current_page + 1}",
             color=COLORS["highlight"]
         )
-        embed.set_footer(text=f"Page {self.current_page + 1}/{len(self.leaderboard_data)}")
+
+        embed.add_field(
+            name="👤 User",
+            value=f"**{display_name}** (`{user_id}`)",
+            inline=False
+        )
+        embed.add_field(
+            name="⭐ Total Points",
+            value=f"`{total}` pts",
+            inline=False
+        )
+
+        if tasks:
+            task_lines = "\n".join(
+                f"• `{task.get('description', tid)}` — **{task['points']} pts**"
+                for tid, task in tasks.items()
+            )
+        else:
+            task_lines = "*No completed tasks yet.*"
+
+        embed.add_field(
+            name="📋 Completed Tasks",
+            value=task_lines,
+            inline=False
+        )
+
+        embed.set_footer(text=f"Page {self.current_page + 1} / {len(self.leaderboard_data)}")
+        if avatar_url:
+            embed.set_thumbnail(url=avatar_url)
+
         return embed
+
 
 
 # 1. Update HealthLogsView to properly handle logging
