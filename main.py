@@ -2061,7 +2061,7 @@ async def alllogs(ctx):
 
 class AllLogsPaginatedView(discord.ui.View):
     def __init__(self, requester: discord.Member, user_logs: List[tuple], guild: discord.Guild):
-        super().__init__(timeout=180)
+        super().__init__(timeout=None)
         self.requester = requester
         self.user_logs = user_logs
         self.guild = guild
@@ -2201,50 +2201,56 @@ class AllLogsPaginatedView(discord.ui.View):
     @discord.ui.button(label="📅 Jump to Date", style=discord.ButtonStyle.primary)
     async def jump_to_date(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Jump to a specific log date for the current user"""
-        _, logs = self.user_logs[self.current_page]
+        try:
+            _, logs = self.user_logs[self.current_page]
     
-        sorted_dates = sorted(logs.items(), key=lambda x: x[0], reverse=True)
+            sorted_dates = sorted(logs.items(), key=lambda x: x[0], reverse=True)
     
-        # Convert to pages
-        date_to_page = {
-            date: idx // self.logs_per_page
-            for idx, (date, _) in enumerate(sorted_dates)
-        }
+            # Convert to pages
+            date_to_page = {
+                date: idx // self.logs_per_page
+                for idx, (date, _) in enumerate(sorted_dates)
+            }
     
-        options = []
-        for date, page in date_to_page.items():
-            try:
-                date_obj = datetime.strptime(date, "%Y-%m-%d").date()
-                label = date_obj.strftime("%b %d, %Y")
-            except ValueError:
-                label = date
-            options.append(
-                discord.SelectOption(
-                    label=label,
-                    value=str(page),
-                    description=f"Jump to logs from {label}"
+            options = []
+            for date, page in date_to_page.items():
+                try:
+                    date_obj = datetime.strptime(date, "%Y-%m-%d").date()
+                    label = date_obj.strftime("%b %d, %Y")
+                except ValueError:
+                    label = date
+                options.append(
+                    discord.SelectOption(
+                        label=label[:100],  # ensure label max length
+                        value=str(page),
+                        description=f"Jump to logs from {label}"[:100]  # max 100 chars
+                    )
                 )
+    
+            select = discord.ui.Select(
+                placeholder="Select a date...",
+                options=options[:25]  # Discord limit
             )
     
-        select = discord.ui.Select(
-            placeholder="Select a date...",
-            options=options[:25]  # Discord max
-        )
+            async def select_callback(select_interaction: discord.Interaction):
+                self.current_log_page = int(select.values[0])
+                await select_interaction.response.edit_message(embed=self.create_embed(), view=self)
     
-        async def select_callback(interaction: discord.Interaction):
-            self.current_log_page = int(select.values[0])
-            await interaction.response.edit_message(embed=self.create_embed(), view=self)
+            select.callback = select_callback
     
-        select.callback = select_callback
+            view = discord.ui.View()
+            view.add_item(select)
     
-        view = discord.ui.View()
-        view.add_item(select)
+            await interaction.response.send_message(
+                content="📅 Select a date to jump to:",
+                view=view,
+                ephemeral=True
+            )
     
-        await interaction.response.send_message(
-            "Select a date to jump to:",
-            view=view,
-            ephemeral=True
-        )
+        except Exception as e:
+            print(f"⚠️ Error in jump_to_date: {e}")
+            await interaction.response.send_message("An error occurred while preparing date options.", ephemeral=True)
+    
 
 @bot.command(name="editlog", help="Edit your last log from a specific date")
 async def edit_log(ctx, date: str, *, new_desc: str):
