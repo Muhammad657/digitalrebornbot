@@ -2207,64 +2207,6 @@ async def edit_log(ctx, date: str, *, new_desc: str):
         await ctx.message.delete()
     except discord.Forbidden:
         pass
-
-
-@bot.command(name="log", help="Log your daily work")
-async def log(ctx, *, message: str):
-    try:
-        print(f"[DEBUG] log triggered with: {message}")
-
-        # Remove surrounding quotes if present
-        if message.startswith('"') and message.endswith('"'):
-            message = message[1:-1]
-
-        user_id = str(ctx.author.id)
-        today = str(datetime.now(EST).date())
-
-        logs = load_logs()
-
-        if user_id not in logs:
-            logs[user_id] = {}
-
-        if today not in logs[user_id]:
-            logs[user_id][today] = []
-        elif isinstance(logs[user_id][today], str):
-            # Convert legacy string log to list format
-            logs[user_id][today] = [{
-                "timestamp": "converted",
-                "log": logs[user_id][today]
-            }]
-
-        logs[user_id][today].append({
-            "timestamp": datetime.now(EST).isoformat(),
-            "log": message
-        })
-
-        save_logs(logs)
-
-        try:
-            await ctx.author.send(f"✅ Your log has been saved:\n`{message}`")
-        except discord.Forbidden:
-            await ctx.send("✅ Log saved, but I couldn't DM you.")
-
-        embed = discord.Embed(
-            title="✅ Log Saved",
-            description=f"Your work for {today} has been recorded!",
-            color=COLORS["success"])
-        await ctx.send(embed=embed)
-
-        try:
-            await ctx.message.delete()
-        except discord.Forbidden:
-            print("[WARN] Couldn't delete user message – missing permissions?")
-
-    except Exception as e:
-        error_embed = discord.Embed(title="❌ Command Error",
-                                    description=f"An error occurred: {e}",
-                                    color=COLORS["error"])
-        await ctx.send(embed=error_embed)
-
-
 @bot.command(name="snooze",
              help="Snooze your daily log reminder for X minutes")
 async def snooze(ctx, minutes: int):
