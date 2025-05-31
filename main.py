@@ -363,37 +363,56 @@ async def update_task_channel():
         print("❌ Task channel not found.")
         return
 
-    # Delete old task messages in the channel
     def is_task_message(m):
         return (
             m.author == bot.user and m.embeds and any(
                 embed.title and "Task #" in embed.title for embed in m.embeds
             )
         )
-    await channel.purge(check=is_task_message)
 
-    now = datetime.now(EST)
+    # Purge up to 100 recent bot task messages
+    await channel.purge(limit=100, check=is_task_message)
 
     for user_id, tasks in bot.task_assignments.items():
         if not tasks:
             continue
-        
-        # Optionally filter tasks here by label if you want, or just pass all tasks
-        filtered_tasks = {}
-        for task_id, task in tasks.items():
-            filtered_tasks[task_id] = task
 
-        # Create and send one paginated view per user for all tasks
+        # Send one paginated message per user
+        filtered_tasks = {tid: t for tid, t in tasks.items()}
+
         view = TaskPaginatedView(filtered_tasks, user_id, label="All Tasks")
         embed = view.create_embed()
-        await channel.send(embed=embed, view=view)
-
+        try:
+            await channel.send(embed=embed, view=view)
+        except Exception as e:
+            print(f"Failed to send task message for user {user_id}: {e}")
+            
 
 import discord
 from discord.ui import View, button
 from datetime import datetime
 
+import discord
+from discord.ui import View, button
+from datetime import datetime, timezone
+
 class TaskPaginatedView(discord.ui.View):
+    STATUS_ICONS = {
+        "Pending": "⏳",
+        "Completed": "✅",
+        "Overdue": "⚠️",
+    }
+    PRIORITY_EMOJIS = {
+        "high": "🔥 High",
+        "normal": "⭐ Normal",
+        "low": "🛌 Low"
+    }
+    PRIORITY_COLORS = {
+        "high": discord.Color.red(),
+        "normal": discord.Color.gold(),
+        "low": discord.Color.dark_grey()
+    }
+
     def __init__(self, tasks: dict, user_id: int, label: str = "all"):
         super().__init__(timeout=None)  # No timeout, infinite lifetime
         self.tasks = list(tasks.items())  # list of (task_id, task_dict)
@@ -405,33 +424,85 @@ class TaskPaginatedView(discord.ui.View):
         task_id, task = self.tasks[self.current_page]
         desc = task.get("description", "Untitled")
         status = task.get("status", "Pending")
-        priority = str(task.get("priority", "Normal")).title()
+        priority_raw = str(task.get("priority", "Normal")).lower()
+        priority_display = self.PRIORITY_EMOJIS.get(priority_raw, priority_raw.title())
+        color = self.PRIORITY_COLORS.get(priority_raw, discord.Color.blue())
         importance = str(task.get("importance", "1")).title()
-    
+
+        # Determine status icon
+        icon_label = self.STATUS_ICONS.get(status, "❔") + f" {status}"
+
+        # Due date handling
         due_date_str = "No deadline"
+        relative_due = None
+        due_date = None
         if "due_date" in task and task["due_date"]:
             try:
                 due_date = datetime.fromisoformat(task["due_date"])
                 due_date_str = due_date.strftime("%b %d, %Y %H:%M")
+                # Calculate relative due date
+                now = datetime.now(tz=due_date.tzinfo) if due_date.tzinfo else datetime.now()
+                diff = due_date - now
+                if diff.days >= 0:
+                    relative_due = f"Due in {diff.days} day{'s' if diff.days != 1 else ''}"
+                else:
+                    relative_due = f"Overdue by {-diff.days} day{'s' if diff.days != -1 else ''}"
             except Exception:
                 pass
-    
-        user = bot.get_user(self.user_id)
-        username = user.name if user else f"User ID {self.user_id}"
-    
+
+        # User info
+        user = None
+        username = f"User ID {self.user_id}"
+        try:
+            # bot is a global variable; this assumes you have a global bot instance
+            user = bot.get_user(self.user_id)
+            if user:
+                username = user.name
+        except Exception:
+            pass
+
         embed = discord.Embed(
-            title=f"Task #{task_id} — {status}",
+            title=f"Task #{task_id} — {icon_label}",
             description=f"**{desc}**",
-            color=discord.Color.blue()
+            color=color,
+            timestamp=datetime.utcnow()
         )
-        embed.add_field(name="Priority", value=priority)
-        embed.add_field(name="Importance", value=importance)
-        embed.add_field(name="Due Date", value=due_date_str)
-        embed.set_footer(text=f"User: {username} | Task {self.current_page + 1} of {len(self.tasks)} | Filter: {self.label}")
-    
+
+        if user and user.avatar:
+            embed.set_author(name=username, icon_url=user.avatar.url)
+        else:
+            embed.set_author(name=username)
+
+        # Fields
+        embed.add_field(name="Priority", value=priority_display, inline=True)
+        embed.add_field(name="Importance", value=importance, inline=True)
+        embed.add_field(name="Due Date", value=due_date_str, inline=True)
+
+        if relative_due:
+            embed.add_field(name="Due Date (Relative)", value=relative_due, inline=True)
+
+        # Tags display (optional)
+        tags = task.get("tags", [])
+        if tags:
+            tags_str = " ".join(f"`#{tag}`" for tag in tags)
+            embed.add_field(name="Tags", value=tags_str, inline=False)
+
+        # Progress bar (optional)
+        progress = task.get("progress", None)
+        if progress is not None:
+            try:
+                progress = int(progress)
+                blocks = int(progress / 10)
+                bar = "█" * blocks + "░" * (10 - blocks)
+                embed.add_field(name="Progress", value=f"{bar} {progress}%", inline=False)
+            except Exception:
+                pass
+
+        embed.set_footer(text=f"Task {self.current_page + 1} of {len(self.tasks)} | Filter: {self.label}")
+
         return embed
-    
-    @button(label="◄ Previous", style=discord.ButtonStyle.secondary, custom_id="task_prev")
+
+    @button(label="◀️ Prev", style=discord.ButtonStyle.secondary, custom_id="task_prev")
     async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.current_page > 0:
             self.current_page -= 1
@@ -439,13 +510,14 @@ class TaskPaginatedView(discord.ui.View):
         else:
             await interaction.response.defer()
 
-    @button(label="Next ►", style=discord.ButtonStyle.secondary, custom_id="task_next")
+    @button(label="Next ▶️", style=discord.ButtonStyle.secondary, custom_id="task_next")
     async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.current_page < len(self.tasks) - 1:
             self.current_page += 1
             await interaction.response.edit_message(embed=self.create_embed(), view=self)
         else:
             await interaction.response.defer()
+
 
 
 class TaskCreationModal(discord.ui.Modal, title="Create New Task"):
