@@ -191,24 +191,28 @@ def parse_flexible_date(date_str: str, default_to_today: bool = False) -> str:
 
 
 async def cleanup_task_assignments():
-    # Create a mapping of all user IDs to their current display names
-    user_map = {}
-    for user_id in bot.task_assignments.keys():
-        try:
-            member = await bot.fetch_user(int(user_id))
-            user_map[user_id] = member.display_name
-        except:
-            continue
-
-    # Find and merge duplicate user entries
     merged_assignments = {}
+    
+    # First pass - convert all keys to strings and merge duplicates
     for user_id, tasks in bot.task_assignments.items():
-        if user_id not in merged_assignments:
-            merged_assignments[user_id] = tasks
-        else:
-            merged_assignments[user_id].update(tasks)
-
-    bot.task_assignments = merged_assignments
+        str_id = str(user_id)
+        if str_id not in merged_assignments:
+            merged_assignments[str_id] = {}
+        
+        # Convert task IDs to strings if needed
+        for task_id, task in tasks.items():
+            merged_assignments[str_id][str(task_id)] = task
+    
+    # Second pass - verify user existence
+    valid_assignments = {}
+    for user_id, tasks in merged_assignments.items():
+        try:
+            user = await bot.fetch_user(int(user_id))
+            valid_assignments[user_id] = tasks
+        except discord.NotFound:
+            continue
+    
+    bot.task_assignments = valid_assignments
     save_tasks(bot.task_assignments)
 
 def award_points(user_id: str, task_id: str, points: int, description: str):
@@ -419,6 +423,11 @@ class TaskPaginatedView(discord.ui.View):
         self.user_id = user_id
         self.label = label
         self.current_page = 0
+        
+    @classmethod
+    async def create_persistent_views(cls):
+        # Register the persistent buttons
+        bot.add_view(cls([], 0))
 
     def create_embed(self) -> discord.Embed:
         task_id, task = self.tasks[self.current_page]
@@ -667,7 +676,9 @@ class LeaderboardView(discord.ui.View):
         super().__init__(timeout=None)
         self.leaderboard_data = leaderboard_data
         self.current_page = 0
-
+    @classmethod
+    async def create_persistent_views(cls):
+        bot.add_view(cls([])) 
     @discord.ui.button(label="◄", style=discord.ButtonStyle.secondary, custom_id="leaderboard:prev")
     async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.current_page > 0:
@@ -1283,8 +1294,8 @@ async def on_ready():
     migrate_logs()  # Legacy migration (if needed)
     bot.user_lives = load_lives()
     bot.add_view(LogButton())  # Persistent buttons
-    bot.add_view(TaskPaginatedView([], 0))  # Dummy data (buttons will reload)
-    bot.add_view(LeaderboardView([]))       # Dummy data
+    await TaskPaginatedView.create_persistent_views()
+    await LeaderboardView.create_persistent_views()     # Dummy data
 
     # --- Task Initialization ---
     bot.task_assignments = load_tasks()
@@ -2287,106 +2298,65 @@ async def add_task(ctx, *, args=None):
     await ctx.send(embed=embed)
     await update_task_channel()  # Update task channel
 
-@bot.command(name="assign",
-             help="Assign task to member: !assign @member <task ID>")
-@admin_only()
+@bot.command(name="assign", help="Assign task to member")
 @is_admin()
 async def assign_task(ctx, member: discord.Member, task_id: int):
-    task_found = None
-    creator_id_to_remove_from = None
-
-    # Find task and creator
-    for creator_id, tasks in bot.user_tasks_created.items():
-        if task_id in tasks:
-            task_found = tasks[task_id]
-            creator_id_to_remove_from = creator_id
-            break
-
-    if not task_found:
-        embed = create_error_embed("Not Found", "Task ID not found.")
-        return await ctx.send(embed=embed)
-
-    if member.id not in bot.task_assignments:
-        bot.task_assignments[member.id] = {}
-
-    bot.task_assignments[member.id][task_id] = dict(task_found)
-    bot.task_assignments[member.id][task_id]["status"] = "Pending"
-    bot.task_assignments[member.id][task_id]["assigned_to"] = member.id
-    bot.task_assignments[member.id][task_id]["assigned_name"] = member.display_name
-
-    # Remove from user_tasks_created since it's now assigned
-    if creator_id_to_remove_from is not None:
-        pass
-        # If user has no more tasks, remove the key completely
-        if not bot.user_tasks_created[creator_id_to_remove_from]:
-            del bot.user_tasks_created[creator_id_to_remove_from]
-
-    # Save both
-    save_tasks(bot.task_assignments)
-    save_created_tasks(bot.user_tasks_created)  # <-- You’ll need this function
-
-    due_str = f", due by {task_found['due_date']}" if task_found['due_date'] else ""
-    points_str = f" | Points: {task_found.get('points', 0)}"
-
-    embed = discord.Embed(
-        title="📌 Task Assigned",
-        description=f"Task #{task_id} has been assigned to {member.display_name}",
-        color=COLORS["success"])
-    embed.add_field(name="Description", value=task_found['description'], inline=False)
-    embed.add_field(name="Due Date", value=task_found.get('due_date', 'Not specified'), inline=True)
-    embed.add_field(name="Priority", value=task_found.get('priority', 'Normal').capitalize(), inline=True)
-    embed.add_field(name="Importance",value=str(task_found.get('importance', 'Not specified')).capitalize(),inline=True)
-
-    embed.add_field(name="Points", value=str(task_found.get('points', 0)), inline=True)
-
-    await ctx.send(embed=embed)
-    await update_task_channel()  # Update task channel
+    try:
+        # Find task in user_tasks_created
+        task_found = None
+        for creator_id, tasks in bot.user_tasks_created.items():
+            if task_id in tasks:
+                task_found = tasks[task_id]
+                del tasks[task_id]  # Remove from created tasks
+                if not tasks:  # Clean up empty dicts
+                    del bot.user_tasks_created[creator_id]
+                break
+                
+        if not task_found:
+            return await ctx.send("❌ Task not found.")
+            
+        # Add to assignments
+        if member.id not in bot.task_assignments:
+            bot.task_assignments[member.id] = {}
+            
+        bot.task_assignments[member.id][task_id] = {
+            **task_found,
+            "status": "Pending",
+            "assigned_at": datetime.now(EST).isoformat(),
+            "assigned_by": ctx.author.id
+        }
+        
+        save_tasks(bot.task_assignments)
+        save_created_tasks(bot.user_tasks_created)
+        
+        await ctx.send(f"✅ Task #{task_id} assigned to {member.mention}")
+        await update_task_channel()
+        
+    except Exception as e:
+        await ctx.send(f"❌ Error assigning task: {e}")Update task channel
 
 @bot.command(name="completetask", help="Mark a task as completed")
 async def complete_task(ctx, task_id: int):
     user_tasks = bot.task_assignments.get(ctx.author.id, {})
     if task_id not in user_tasks:
-        embed = create_error_embed("Not Found",
-                                   "Task ID not found in your assignments.")
-        return await ctx.send(embed=embed)
-
+        return await ctx.send("❌ Task not found in your assignments.")
+        
     task = user_tasks[task_id]
     if task.get("status") == "Completed":
-        embed = create_error_embed("Already Completed", f"Task #{task_id} has already been completed.")
-        return await ctx.send(embed=embed)
+        return await ctx.send("❌ Task already completed.")
+        
     task["status"] = "Completed"
-
-    task["completed_at"] = str(datetime.now(EST))
+    task["completed_at"] = datetime.now(EST).isoformat()
     points = task.get("points", 10)
-
-    # ✅ Correct task name resolution (supports both addtask & modal)
-    task_name = task.get("name") or task.get("description") or f"Task #{task_id}"
-
-    # ✅ Award points with correct task name
-   # ✅ Award points with correct task name
-    award_points(str(ctx.author.id), str(task_id), points, description=task_name)
-
-# ✅ Update in-memory scores from the file
-    with open("scores.json", "r") as f:
-        bot.user_scores = json.load(f)
-
-    # ✅ Show user their updated score (optional: customize how it's displayed)
-    user_score = bot.user_scores.get(str(ctx.author.id), {})
-    task_summary = "\n".join([
-        f"• {data.get('description') or task_id}: {data.get('points', 0)} pts"
-        for task_id, data in user_score.items()
-    ])
-
-
-    embed = create_success_embed(
-        "✅ Task Completed",
-        f"Task #{task_id} marked as completed!\n+{points} points!\n\nYour total score breakdown:\n{task_summary}"
-    )
-    await ctx.send(embed=embed)
-
-    # Optional: refresh task channel view if you use a public board
+    
+    # Award points
+    award_points(str(ctx.author.id), str(task_id), points, task.get("description", f"Task #{task_id}"))
+    
+    # Update leaderboard
     await update_leaderboard_channel()
     await update_task_channel()
+    
+    await ctx.send(f"✅ Task #{task_id} marked as completed! +{points} points")
 
 
 @bot.command(name="createtask", help="Create a new task using a form")
@@ -3146,87 +3116,64 @@ from datetime import datetime, timedelta
 @tasks.loop(minutes=10)
 async def check_due_dates():
     now = datetime.now(EST)
-
+    
     for user_id, tasks in bot.task_assignments.items():
-        member = await bot.fetch_user(int(user_id))
+        try:
+            member = await bot.fetch_user(int(user_id))
+        except discord.NotFound:
+            continue
+            
         for task_id, task in tasks.items():
-            if task.get("status") == "Completed" or not task.get("due_date"):
+            if task.get("status") == "Completed":
                 continue
-
+                
+            if not task.get("due_date"):
+                continue
+                
             try:
                 due_date = datetime.fromisoformat(task["due_date"])
                 if due_date.tzinfo is None:
                     due_date = EST.localize(due_date)
-                else:
-                    due_date = due_date.astimezone(EST)
-
+                    
                 time_left = due_date - now
-                total_hours_left = time_left.total_seconds() / 3600
-
-                # Debug print
-                print(f"[DEBUG] Now: {now} | Task #{task_id} Due: {due_date} | Hours left: {total_hours_left:.2f}")
-
-                # 24-Hour Reminder (once)
-                target_window_start = now + timedelta(hours=24)
-                target_window_end = now + timedelta(hours=24, minutes=1)
-                if target_window_start <= due_date < target_window_end and not task.get("reminded_24h"):
-                    embed = discord.Embed(
-                        title="🔔 Task Due in 24 Hours!",
-                        description=f"Task `#{task_id}` is due at {due_date.strftime('%Y-%m-%d %H:%M')}",
-                        color=COLORS["info"]
-                    )
-                    await bot.get_channel(TASK_CHANNEL_ID).send(f"{member.mention}", embed=embed)
-                    task["reminded_24h"] = True
-
-                # Every 2-hour reminder within 24h window
-                if 1 < total_hours_left < 24:
-                    last_2h_reminder = task.get("last_2h_reminder")
-                    rounded_hours = int(total_hours_left)
-                    if rounded_hours % 2 == 0 and last_2h_reminder != rounded_hours:
-                        embed = discord.Embed(
-                            title="⏰ Task Due Soon",
-                            description=f"Task `#{task_id}` is due in {rounded_hours} hours at {due_date.strftime('%Y-%m-%d %H:%M')}",
-                            color=COLORS["warning"]
-                        )
-                        await bot.get_channel(TASK_CHANNEL_ID).send(f"{member.mention}", embed=embed)
-                        task["last_2h_reminder"] = rounded_hours
-
-                # Last 1-hour reminder (once)
-                target_window_start_1h = now + timedelta(hours=1)
-                target_window_end_1h = now + timedelta(hours=1, minutes=1)
-                if target_window_start_1h <= due_date < target_window_end_1h and not task.get("reminded_1h"):
-                    embed = discord.Embed(
-                        title="⏰ Task Due in 1 Hour!",
-                        description=f"Task `#{task_id}` is due at {due_date.strftime('%Y-%m-%d %H:%M')}",
-                        color=COLORS["warning"]
-                    )
-                    await bot.get_channel(TASK_CHANNEL_ID).send(f"{member.mention}", embed=embed)
-                    task["reminded_1h"] = True
-
-                # Overdue reminders (repeated until completion)
-                if total_hours_left <= 0:
+                if time_left.total_seconds() <= 0:
+                    # Overdue handling
                     if not task.get("reminded_overdue"):
-                        # First overdue alert
-                        embed = discord.Embed(
-                            title="🚨 Task Overdue!",
-                            description=f"Task `#{task_id}` was due at {due_date.strftime('%Y-%m-%d %H:%M')}! Please complete it ASAP!",
-                            color=COLORS["error"]
-                        )
-                        await bot.get_channel(TASK_CHANNEL_ID).send(f"{member.mention}", embed=embed)
+                        await send_reminder(member, task_id, task, "overdue")
                         task["reminded_overdue"] = True
-                    else:
-                        # Subsequent overdue reminders (optional, comment out if too spammy)
-                        embed = discord.Embed(
-                            title="⚠️ Task Still Overdue!",
-                            description=f"Task `#{task_id}` is still overdue! Please complete it quickly!",
-                            color=COLORS["error"]
-                        )
-                        await bot.get_channel(TASK_CHANNEL_ID).send(f"{member.mention}", embed=embed)
-
+                else:
+                    # Future due date handling
+                    hours_left = time_left.total_seconds() / 3600
+                    
+                    if 24 <= hours_left < 25 and not task.get("reminded_24h"):
+                        await send_reminder(member, task_id, task, "24h")
+                        task["reminded_24h"] = True
+                    elif 1 <= hours_left < 2 and not task.get("reminded_1h"):
+                        await send_reminder(member, task_id, task, "1h")
+                        task["reminded_1h"] = True
+                        
             except Exception as e:
-                print(f"[ERROR] Task #{task_id} error: {e}")
-
+                print(f"Error checking task {task_id}: {e}")
+                
     save_tasks(bot.task_assignments)
+
+async def send_reminder(member, task_id, task, reminder_type):
+    channel = bot.get_channel(TASK_CHANNEL_ID)
+    if not channel:
+        return
+        
+    messages = {
+        "24h": f"🔔 Task #{task_id} is due in 24 hours!",
+        "1h": f"⏰ Task #{task_id} is due in 1 hour!",
+        "overdue": f"🚨 Task #{task_id} is overdue!"
+    }
+    
+    embed = discord.Embed(
+        title=messages[reminder_type],
+        description=task["description"],
+        color=COLORS["error"] if reminder_type == "overdue" else COLORS["warning"]
+    )
+    await channel.send(f"{member.mention}", embed=embed)
 
 
 
