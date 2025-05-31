@@ -236,110 +236,110 @@ def save_created_tasks(data):
     with open("created_tasks.json", "w") as f:
         json.dump(data, f, indent=4)
 
-async def update_task_channel():
-    channel = bot.get_channel(TASK_CHANNEL_ID)
+# async def update_task_channel():
+#     channel = bot.get_channel(TASK_CHANNEL_ID)
 
-    def is_task_board(m):
-        # Only delete messages that are task boards (not reminders)
-        return (m.author == bot.user and m.embeds and any(
-            embed.title.startswith("📋 ") and "Tasks" in embed.title
-            for embed in m.embeds))
+#     def is_task_board(m):
+#         # Only delete messages that are task boards (not reminders)
+#         return (m.author == bot.user and m.embeds and any(
+#             embed.title.startswith("📋 ") and "Tasks" in embed.title
+#             for embed in m.embeds))
 
-    await channel.purge(check=is_task_board)
+#     await channel.purge(check=is_task_board)
 
-    comments = load_comments()
+#     comments = load_comments()
 
-    IMPORTANCE_COLORS = {
-        "5": 0xFF0000,  # Very High
-        "4": 0xFF4500,  # High
-        "3": 0xFFD700,  # Normal
-        "2": 0x90EE90,  # Low
-        "1": 0xFFFFFF   # Very Low
-    }
+#     IMPORTANCE_COLORS = {
+#         "5": 0xFF0000,  # Very High
+#         "4": 0xFF4500,  # High
+#         "3": 0xFFD700,  # Normal
+#         "2": 0x90EE90,  # Low
+#         "1": 0xFFFFFF   # Very Low
+#     }
 
-    STATUS_EMOJIS = {
-        "Completed": "✅",
-        "In Progress": "🔄",
-        "Pending": "⏳",
-        "Overdue": "🚨",
-        "Due Today": "⚠️",
-        "Due Tomorrow": "🔔"
-    }
+#     STATUS_EMOJIS = {
+#         "Completed": "✅",
+#         "In Progress": "🔄",
+#         "Pending": "⏳",
+#         "Overdue": "🚨",
+#         "Due Today": "⚠️",
+#         "Due Tomorrow": "🔔"
+#     }
 
-    # Map user IDs to display names
-    display_names = {}
-    for user_id in bot.task_assignments.keys():
-        try:
-            member = await bot.fetch_user(int(user_id))
-            display_names[user_id] = member.display_name
-        except:
-            display_names[user_id] = f"User {user_id}"
+#     # Map user IDs to display names
+#     display_names = {}
+#     for user_id in bot.task_assignments.keys():
+#         try:
+#             member = await bot.fetch_user(int(user_id))
+#             display_names[user_id] = member.display_name
+#         except:
+#             display_names[user_id] = f"User {user_id}"
 
-    # Create one embed per user with all their tasks
-    for user_id, tasks in bot.task_assignments.items():
-        if not tasks:
-            continue
+#     # Create one embed per user with all their tasks
+#     for user_id, tasks in bot.task_assignments.items():
+#         if not tasks:
+#             continue
 
-        display_name = display_names.get(user_id, f"User {user_id}")
-        now = datetime.now(EST)
+#         display_name = display_names.get(user_id, f"User {user_id}")
+#         now = datetime.now(EST)
 
-        embed = discord.Embed(
-            title=f"📋 {display_name}'s Tasks",
-            description=f"Last updated: {now.strftime('%Y-%m-%d %H:%M')}",
-            color=0x5865F2  # default color, will update based on last task importance
-        )
+#         embed = discord.Embed(
+#             title=f"📋 {display_name}'s Tasks",
+#             description=f"Last updated: {now.strftime('%Y-%m-%d %H:%M')}",
+#             color=0x5865F2  # default color, will update based on last task importance
+#         )
 
-        last_task_importance = "3"  # default importance (Normal)
+#         last_task_importance = "3"  # default importance (Normal)
         
-        for task_id, task in tasks.items():
-            due_date = None
-            days_left = None
+#         for task_id, task in tasks.items():
+#             due_date = None
+#             days_left = None
 
-            if task.get("due_date"):
-                try:
-                    due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST)
-                    days_left = (due_date.date() - now.date()).days
-                except (ValueError, TypeError):
-                    pass
+#             if task.get("due_date"):
+#                 try:
+#                     due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST)
+#                     days_left = (due_date.date() - now.date()).days
+#                 except (ValueError, TypeError):
+#                     pass
 
-            status = task.get("status", "Pending")
-            if status != "Completed" and due_date:
-                if days_left < 0:
-                    status = "Overdue"
-                elif days_left == 0:
-                    status = "Due Today"
-                elif days_left == 1:
-                    status = "Due Tomorrow"
+#             status = task.get("status", "Pending")
+#             if status != "Completed" and due_date:
+#                 if days_left < 0:
+#                     status = "Overdue"
+#                 elif days_left == 0:
+#                     status = "Due Today"
+#                 elif days_left == 1:
+#                     status = "Due Tomorrow"
 
-            importance = str(task.get("importance", "3"))
-            last_task_importance = importance  # keep updating, so last task importance is used for color
+#             importance = str(task.get("importance", "3"))
+#             last_task_importance = importance  # keep updating, so last task importance is used for color
 
-            importance_title = {
-                "5": "Very High",
-                "4": "High",
-                "3": "Normal",
-                "2": "Low",
-                "1": "Very Low"
-            }.get(importance, "Normal")
+#             importance_title = {
+#                 "5": "Very High",
+#                 "4": "High",
+#                 "3": "Normal",
+#                 "2": "Low",
+#                 "1": "Very Low"
+#             }.get(importance, "Normal")
 
-            emoji = STATUS_EMOJIS.get(status, "📝")
-            priority = task.get("priority", "Normal").title()
+#             emoji = STATUS_EMOJIS.get(status, "📝")
+#             priority = task.get("priority", "Normal").title()
 
-            task_line = (
-                f"{emoji} `#{task_id}` **{task['description']}**\n"
-                f"▸ Status: {status} | "
-                f"Due: {due_date.strftime('%b %d %H:%M') if due_date else 'No deadline'} | "
-                f"Priority: {priority} | "
-                f"Importance: {importance_title} | "
-                f"Comments: {len(comments.get(str(task_id), []))}"
-            )
+#             task_line = (
+#                 f"{emoji} `#{task_id}` **{task['description']}**\n"
+#                 f"▸ Status: {status} | "
+#                 f"Due: {due_date.strftime('%b %d %H:%M') if due_date else 'No deadline'} | "
+#                 f"Priority: {priority} | "
+#                 f"Importance: {importance_title} | "
+#                 f"Comments: {len(comments.get(str(task_id), []))}"
+#             )
 
-            embed.add_field(name="\u200b", value=task_line, inline=False)
+#             embed.add_field(name="\u200b", value=task_line, inline=False)
 
-        # Set embed color based on last task importance
-        embed.color = IMPORTANCE_COLORS.get(last_task_importance, 0x5865F2)
+#         # Set embed color based on last task importance
+#         embed.color = IMPORTANCE_COLORS.get(last_task_importance, 0x5865F2)
 
-        await channel.send(embed=embed)
+#         await channel.send(embed=embed)
 
 def get_user_lives(user_id):
     lives = load_lives()
@@ -3101,7 +3101,7 @@ async def add_category(ctx, task_id: int, *, category: str):
 
 from datetime import datetime, timedelta
 
-@tasks.loop(minutes=1)
+@tasks.loop(minutes=10)
 async def check_due_dates():
     now = datetime.now(EST)
 
