@@ -2022,10 +2022,10 @@ async def touch_member(ctx, member: discord.Member):
         pass
 
 
-@bot.command(name="alllogs", help="View all users' logs (Admin only)")
+@bot.command(name="alllogs", help="View all users' logs with pagination (Admin only)")
 @admin_only()
-@commands.has_permissions(administrator=True)
 async def alllogs(ctx):
+    """Admin command to view all logs in a paginated format"""
     logs = load_logs()
     guild = ctx.guild
     if guild is None:
@@ -2042,41 +2042,137 @@ async def alllogs(ctx):
         await ctx.author.send("📭 No logs found.")
         return
 
-    messages = []
-    for user_id, dates in logs.items():
-        member = guild.get_member(int(user_id))
-        name = member.display_name if member else f"User ID {user_id}"
-        entry_lines = [f"**{name}** (`{user_id}`):"]
+    # Create a list of (user_id, user_logs) tuples sorted by most recent log date
+    sorted_users = sorted(
+        [(uid, user_logs) for uid, user_logs in logs.items()],
+        key=lambda x: max(x[1].keys()) if x[1] else "",
+        reverse=True
+    )
 
-        for date, logs_list in sorted(dates.items()):
-            entry_lines.append(f"  - {date}:")
-            for log_entry in logs_list:
-                if isinstance(log_entry, dict):
-                    ts = log_entry.get("timestamp", "unknown time")
-                    log_text = log_entry.get("log", "")
-                    entry_lines.append(f"    • [{ts}] {log_text}")
+    # Create paginated view
+    view = AllLogsPaginatedView(ctx.author, sorted_users, guild)
+    embed = view.create_embed()
+    await ctx.author.send(embed=embed, view=view)
+
+class AllLogsPaginatedView(discord.ui.View):
+    def __init__(self, requester: discord.Member, user_logs: List[tuple], guild: discord.Guild):
+        super().__init__(timeout=180)
+        self.requester = requester
+        self.user_logs = user_logs
+        self.guild = guild
+        self.current_page = 0
+
+    async def on_timeout(self):
+        # Disable buttons when view times out
+        for item in self.children:
+            item.disabled = True
+        try:
+            await self.message.edit(view=self)
+        except discord.NotFound:
+            pass
+
+    def create_embed(self) -> discord.Embed:
+        user_id, logs = self.user_logs[self.current_page]
+        member = self.guild.get_member(int(user_id))
+        display_name = member.display_name if member else f"User ID {user_id}"
+
+        embed = discord.Embed(
+            title=f"📚 Logs for {display_name}",
+            color=COLORS["primary"],
+            timestamp=datetime.now(EST)
+        )
+
+        # Sort logs by date (newest first)
+        sorted_dates = sorted(logs.items(), key=lambda x: x[0], reverse=True)
+
+        for date, entries in sorted_dates[:3]:  # Show up to 3 most recent dates
+            # Format date nicely
+            try:
+                date_obj = datetime.strptime(date, "%Y-%m-%d").date()
+                formatted_date = date_obj.strftime("%A, %B %d, %Y")
+            except ValueError:
+                formatted_date = date
+
+            # Process entries
+            if isinstance(entries, str):
+                entries = [{"log": entries}]
+            elif isinstance(entries, dict):
+                entries = [entries]
+
+            log_text = ""
+            for entry in entries:
+                if isinstance(entry, dict):
+                    timestamp = entry.get("timestamp", "")
+                    log = entry.get("log", "")
+                    log_text += f"**{timestamp}**\n{log}\n\n"
                 else:
-                    entry_lines.append(f"    • {log_entry}")
+                    log_text += f"{entry}\n\n"
 
-        messages.append("\n".join(entry_lines))
+            embed.add_field(
+                name=f"📅 {formatted_date}",
+                value=log_text or "No log content",
+                inline=False
+            )
 
-    # Chunk and DM to admin
-    chunk_size = 1900
-    chunks = []
-    current_chunk = ""
-    for msg in messages:
-        if len(current_chunk) + len(msg) + 2 > chunk_size:
-            chunks.append(current_chunk)
-            current_chunk = ""
-        current_chunk += msg + "\n\n"
+        # Add user info to footer
+        embed.set_footer(
+            text=f"User ID: {user_id} • Page {self.current_page + 1}/{len(self.user_logs)}"
+        )
 
-    if current_chunk:
-        chunks.append(current_chunk)
+        return embed
 
-    for chunk in chunks:
-        await ctx.author.send(f"📋 All Logs:\n{chunk}")
+    @discord.ui.button(label="◄ Previous User", style=discord.ButtonStyle.secondary)
+    async def previous_user(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page > 0:
+            self.current_page -= 1
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
+        else:
+            await interaction.response.defer()
 
+    @discord.ui.button(label="Next User ►", style=discord.ButtonStyle.secondary)
+    async def next_user(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page < len(self.user_logs) - 1:
+            self.current_page += 1
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
+        else:
+            await interaction.response.defer()
 
+    @discord.ui.button(label="Jump to User", style=discord.ButtonStyle.primary)
+    async def jump_to_user(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Button to select a specific user from a dropdown"""
+        # Create a select menu with all users
+        options = []
+        for i, (user_id, _) in enumerate(self.user_logs):
+            member = self.guild.get_member(int(user_id))
+            label = member.display_name if member else f"User {user_id}"
+            options.append(
+                discord.SelectOption(
+                    label=label[:25],
+                    value=str(i),
+                    description=f"View {label}'s logs"
+                )
+            )
+
+        select = discord.ui.Select(
+            placeholder="Select a user...",
+            options=options[:25]  # Discord limits to 25 options
+        )
+
+        async def select_callback(interaction: discord.Interaction):
+            self.current_page = int(select.values[0])
+            await interaction.response.edit_message(
+                embed=self.create_embed(),
+                view=self
+            )
+
+        select.callback = select_callback
+        view = discord.ui.View()
+        view.add_item(select)
+        await interaction.response.send_message(
+            "Select a user to view their logs:",
+            view=view,
+            ephemeral=True
+        )
 @bot.command(name="editlog", help="Edit your last log from a specific date")
 async def edit_log(ctx, date: str, *, new_desc: str):
     user_logs = load_logs()
