@@ -2622,6 +2622,8 @@ async def all_tasks(ctx):
 
 import re
 from datetime import datetime, timedelta
+import discord
+from discord.ext import commands
 
 @bot.command(name="updatetask")
 async def update_task(ctx, *, args=None):
@@ -2687,6 +2689,9 @@ async def update_task(ctx, *, args=None):
             embed = create_error_embed("Invalid Date/Time", "Please use formats like `today`, `tomorrow`, or `YYYY-MM-DD HH:MM`.")
             return await ctx.send(embed=embed)
 
+    # Flag to track if updated
+    updated = False
+
     # Update user-created tasks
     for creator_id, tasks in bot.user_tasks_created.items():
         if task_id in tasks:
@@ -2698,37 +2703,52 @@ async def update_task(ctx, *, args=None):
                 'points': points
             })
 
-            embed = discord.Embed(title=f"✅ Task #{task_id} Updated", color=COLORS["success"])
-            embed.add_field(name="Description", value=new_desc, inline=False)
-            embed.add_field(name="Due Date", value=due_iso or "Not specified", inline=True)
-            embed.add_field(name="Priority", value=priority.capitalize(), inline=True)
-            embed.add_field(name="Importance", value=str(importance), inline=True)
-            embed.add_field(name="Points", value=str(points), inline=True)
-            return await ctx.send(embed=embed)
+            # Also update in task_assignments if exists
+            for assignee_id, assigned_tasks in bot.task_assignments.items():
+                if task_id in assigned_tasks:
+                    assigned_tasks[task_id].update({
+                        'description': new_desc,
+                        'due_date': due_iso,
+                        'priority': priority,
+                        'importance': importance,
+                        'points': points
+                    })
 
-    # Update assigned tasks
-    for assignee_id, tasks in bot.task_assignments.items():
-        if task_id in tasks:
-            tasks[task_id].update({
-                'description': new_desc,
-                'due_date': due_iso,
-                'priority': priority,
-                'importance': importance,
-                'points': points
-            })
-
+            # Save both dicts after update
+            save_tasks(bot.user_tasks_created)
             save_tasks(bot.task_assignments)
 
-            embed = discord.Embed(title=f"✅ Task #{task_id} Updated", color=COLORS["success"])
-            embed.add_field(name="Description", value=new_desc, inline=False)
-            embed.add_field(name="Due Date", value=due_iso or "Not specified", inline=True)
-            embed.add_field(name="Priority", value=priority.capitalize(), inline=True)
-            embed.add_field(name="Importance", value=str(importance), inline=True)
-            embed.add_field(name="Points", value=str(points), inline=True)
-            return await ctx.send(embed=embed)
+            updated = True
+            break  # stop searching after found
 
-    embed = create_error_embed("Not Found", f"Task ID {task_id} not found in your tasks.")
-    await ctx.send(embed=embed)
+    # If not found in user_tasks_created, try task_assignments directly
+    if not updated:
+        for assignee_id, tasks in bot.task_assignments.items():
+            if task_id in tasks:
+                tasks[task_id].update({
+                    'description': new_desc,
+                    'due_date': due_iso,
+                    'priority': priority,
+                    'importance': importance,
+                    'points': points
+                })
+
+                save_tasks(bot.task_assignments)
+                updated = True
+                break
+
+    if updated:
+        embed = discord.Embed(title=f"✅ Task #{task_id} Updated", color=COLORS["success"])
+        embed.add_field(name="Description", value=new_desc, inline=False)
+        embed.add_field(name="Due Date", value=due_iso or "Not specified", inline=True)
+        embed.add_field(name="Priority", value=priority.capitalize(), inline=True)
+        embed.add_field(name="Importance", value=str(importance), inline=True)
+        embed.add_field(name="Points", value=str(points), inline=True)
+        return await ctx.send(embed=embed)
+    else:
+        embed = create_error_embed("Not Found", f"Task ID {task_id} not found in your tasks.")
+        await ctx.send(embed=embed)
+
 
 
 @bot.command(name="commenttask",
