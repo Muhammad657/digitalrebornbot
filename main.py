@@ -363,43 +363,30 @@ async def update_task_channel():
         print("❌ Task channel not found.")
         return
 
-    # Delete old task messages (those with Pending, Completed, Overdue in title)
+    # Delete old task messages in the channel
     def is_task_message(m):
-        return m.author == bot.user and m.embeds and any(
-            embed.title and any(kw in embed.title for kw in ["Pending", "Completed", "Overdue"])
-            for embed in m.embeds
+        return (
+            m.author == bot.user and m.embeds and any(
+                embed.title and "Task #" in embed.title for embed in m.embeds
+            )
         )
     await channel.purge(check=is_task_message)
 
-    # Categorize tasks per user by status and send paginated views
+    now = datetime.now(EST)
+
     for user_id, tasks in bot.task_assignments.items():
         if not tasks:
             continue
-
-        categorized = {"Pending": {}, "Completed": {}, "Overdue": {}}
-        now = datetime.now(EST)
-
+        
+        # Optionally filter tasks here by label if you want, or just pass all tasks
+        filtered_tasks = {}
         for task_id, task in tasks.items():
-            status = task.get("status", "Pending")
-            due_date = None
-            if task.get("due_date"):
-                try:
-                    due_date = datetime.fromisoformat(task["due_date"]).astimezone(EST)
-                except ValueError:
-                    pass
+            filtered_tasks[task_id] = task
 
-            if status == "Completed":
-                categorized["Completed"][task_id] = task
-            elif due_date and due_date < now:
-                categorized["Overdue"][task_id] = task
-            else:
-                categorized["Pending"][task_id] = task
-
-        for label, filtered_tasks in categorized.items():
-            if filtered_tasks:
-                view = TaskPaginatedView(filtered_tasks, user_id, label)
-                embed = view.create_embed()
-                await channel.send(embed=embed, view=view)
+        # Create and send one paginated view per user for all tasks
+        view = TaskPaginatedView(filtered_tasks, user_id, label="All Tasks")
+        embed = view.create_embed()
+        await channel.send(embed=embed, view=view)
 
 
 import discord
@@ -415,32 +402,35 @@ class TaskPaginatedView(discord.ui.View):
         self.current_page = 0
 
     def create_embed(self) -> discord.Embed:
-        task_id, task = self.tasks[self.current_page]
-        desc = task.get("description", "Untitled")
-        status = task.get("status", "Pending")
-        priority = str(task.get("priority", "Normal")).title()
-        importance = str(task.get("importance", "1")).title()
+    task_id, task = self.tasks[self.current_page]
+    desc = task.get("description", "Untitled")
+    status = task.get("status", "Pending")
+    priority = str(task.get("priority", "Normal")).title()
+    importance = str(task.get("importance", "1")).title()
 
-        due_date_str = "No deadline"
-        if "due_date" in task and task["due_date"]:
-            try:
-                due_date = datetime.fromisoformat(task["due_date"])
-                due_date_str = due_date.strftime("%b %d, %Y %H:%M")
-            except Exception:
-                pass
+    due_date_str = "No deadline"
+    if "due_date" in task and task["due_date"]:
+        try:
+            due_date = datetime.fromisoformat(task["due_date"])
+            due_date_str = due_date.strftime("%b %d, %Y %H:%M")
+        except Exception:
+            pass
 
-        embed = discord.Embed(
-            title=f"Task #{task_id} — {status}",
-            description=f"**{desc}**",
-            color=discord.Color.blue()
-        )
-        embed.add_field(name="Priority", value=priority)
-        embed.add_field(name="Importance", value=importance)
-        embed.add_field(name="Due Date", value=due_date_str)
-        embed.set_footer(text=f"Task {self.current_page + 1} of {len(self.tasks)} | Filter: {self.label}")
+    user = bot.get_user(self.user_id)
+    username = user.name if user else f"User ID {self.user_id}"
 
-        return embed
+    embed = discord.Embed(
+        title=f"Task #{task_id} — {status}",
+        description=f"**{desc}**",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="Priority", value=priority)
+    embed.add_field(name="Importance", value=importance)
+    embed.add_field(name="Due Date", value=due_date_str)
+    embed.set_footer(text=f"User: {username} | Task {self.current_page + 1} of {len(self.tasks)} | Filter: {self.label}")
 
+    return embed
+    
     @button(label="◄ Previous", style=discord.ButtonStyle.secondary, custom_id="task_prev")
     async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.current_page > 0:
