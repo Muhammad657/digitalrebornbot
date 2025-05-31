@@ -402,34 +402,34 @@ class TaskPaginatedView(discord.ui.View):
         self.current_page = 0
 
     def create_embed(self) -> discord.Embed:
-    task_id, task = self.tasks[self.current_page]
-    desc = task.get("description", "Untitled")
-    status = task.get("status", "Pending")
-    priority = str(task.get("priority", "Normal")).title()
-    importance = str(task.get("importance", "1")).title()
-
-    due_date_str = "No deadline"
-    if "due_date" in task and task["due_date"]:
-        try:
-            due_date = datetime.fromisoformat(task["due_date"])
-            due_date_str = due_date.strftime("%b %d, %Y %H:%M")
-        except Exception:
-            pass
-
-    user = bot.get_user(self.user_id)
-    username = user.name if user else f"User ID {self.user_id}"
-
-    embed = discord.Embed(
-        title=f"Task #{task_id} — {status}",
-        description=f"**{desc}**",
-        color=discord.Color.blue()
-    )
-    embed.add_field(name="Priority", value=priority)
-    embed.add_field(name="Importance", value=importance)
-    embed.add_field(name="Due Date", value=due_date_str)
-    embed.set_footer(text=f"User: {username} | Task {self.current_page + 1} of {len(self.tasks)} | Filter: {self.label}")
-
-    return embed
+        task_id, task = self.tasks[self.current_page]
+        desc = task.get("description", "Untitled")
+        status = task.get("status", "Pending")
+        priority = str(task.get("priority", "Normal")).title()
+        importance = str(task.get("importance", "1")).title()
+    
+        due_date_str = "No deadline"
+        if "due_date" in task and task["due_date"]:
+            try:
+                due_date = datetime.fromisoformat(task["due_date"])
+                due_date_str = due_date.strftime("%b %d, %Y %H:%M")
+            except Exception:
+                pass
+    
+        user = bot.get_user(self.user_id)
+        username = user.name if user else f"User ID {self.user_id}"
+    
+        embed = discord.Embed(
+            title=f"Task #{task_id} — {status}",
+            description=f"**{desc}**",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Priority", value=priority)
+        embed.add_field(name="Importance", value=importance)
+        embed.add_field(name="Due Date", value=due_date_str)
+        embed.set_footer(text=f"User: {username} | Task {self.current_page + 1} of {len(self.tasks)} | Filter: {self.label}")
+    
+        return embed
     
     @button(label="◄ Previous", style=discord.ButtonStyle.secondary, custom_id="task_prev")
     async def previous(self, interaction: discord.Interaction, button: discord.ui.Button):
