@@ -2333,7 +2333,7 @@ async def assign_task(ctx, member: discord.Member, task_id: int):
         await update_task_channel()
         
     except Exception as e:
-        await ctx.send(f"❌ Error assigning task: {e}")Update task channel
+        await ctx.send(f"❌ Error assigning task: {e}")
 
 @bot.command(name="completetask", help="Mark a task as completed")
 async def complete_task(ctx, task_id: int):
