@@ -2846,6 +2846,7 @@ async def admin_log(ctx, member: discord.Member, date: Optional[str] = None, *, 
             pass
 
         await ctx.send(f"✅ Log added for {member.mention} on {log_date} (+2 points)")
+        await update_leaderboard_channel()
 
     except Exception as e:
         error_embed = discord.Embed(
@@ -2890,6 +2891,7 @@ async def log(ctx, *, message: str):
             color=COLORS["success"]
         )
         await ctx.send(embed=embed)
+        await update_leaderboard_channel()
 
     except Exception as e:
         error_embed = discord.Embed(
