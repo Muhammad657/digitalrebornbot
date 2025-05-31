@@ -693,7 +693,7 @@ class LeaderboardView(discord.ui.View):
         self.leaderboard_data = leaderboard_data
         self.page_size = page_size
         self.current_page = 0
-        self.max_page = (len(leaderboard_data) // page_size
+        self.max_page = (len(leaderboard_data) // page_size)  # Added the closing )
 
     def create_embed(self) -> discord.Embed:
         start_idx = self.current_page * self.page_size
