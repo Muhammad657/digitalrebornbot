@@ -81,6 +81,7 @@ class TaskBot(commands.Bot):
 
 
 bot = TaskBot(command_prefix="!", intents=intents, case_insensitive=True)
+bot.task_message_refs = {}  # user_id -> message object
 
 
 def is_admin():
@@ -1300,7 +1301,6 @@ async def on_ready():
     bot.task_assignments = load_tasks()
     bot.user_tasks_created = {}
     bot.comments = load_comments()
-    bot.task_message_refs = {}  # user_id -> message object
 
     # Debug: Print loaded tasks to verify due dates
     print(f"\n[Task Debug] Loaded {len(bot.task_assignments)} users with tasks:")
