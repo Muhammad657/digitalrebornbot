@@ -85,6 +85,22 @@ class TaskBot(commands.Bot):
         self.task_assignments: Dict[int, Dict[int, Dict]] = {}
         self.user_lives: Dict[int, int] = {}  # New: Track user lives
         self.help_command = None
+        # Add to your bot class
+        self.user_levels = {}  # user_id: level
+        self.user_xp = {}      # user_id: xp
+
+async def award_xp(self, user_id, amount):
+    self.user_xp[user_id] = self.user_xp.get(user_id, 0) + amount
+    xp_needed = 100 * (self.user_levels.get(user_id, 0) + 1)
+    if self.user_xp[user_id] >= xp_needed:
+        self.user_levels[user_id] = self.user_levels.get(user_id, 0) + 1
+        await self.notify_level_up(user_id)
+
+async def notify_level_up(self, user_id):
+    user = await self.fetch_user(user_id)
+    channel = self.get_channel(CHANNEL_ID)
+    await channel.send(f"🎉 {user.mention} leveled up to level {self.user_levels[user_id]}!")
+
 
 
 bot = TaskBot(command_prefix="!", intents=intents, case_insensitive=True)
@@ -107,22 +123,6 @@ COMMENTS_FILE = "comments.json"
 BADGES_FILE = "badges.json"
 WORK_SESSIONS_FILE = "work_sessions.json"
  
-# Add to your bot class
-self.user_levels = {}  # user_id: level
-self.user_xp = {}      # user_id: xp
-
-async def award_xp(self, user_id, amount):
-    self.user_xp[user_id] = self.user_xp.get(user_id, 0) + amount
-    xp_needed = 100 * (self.user_levels.get(user_id, 0) + 1)
-    if self.user_xp[user_id] >= xp_needed:
-        self.user_levels[user_id] = self.user_levels.get(user_id, 0) + 1
-        await self.notify_level_up(user_id)
-
-async def notify_level_up(self, user_id):
-    user = await self.fetch_user(user_id)
-    channel = self.get_channel(CHANNEL_ID)
-    await channel.send(f"🎉 {user.mention} leveled up to level {self.user_levels[user_id]}!")
-
 def with_parsed_date(param_name: str):
     """Decorator to parse a date parameter flexibly."""
 
