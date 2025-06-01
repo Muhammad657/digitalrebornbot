@@ -1905,19 +1905,6 @@ class SilentCheckFailure(commands.CheckFailure):
     pass
 
 
-def admin_only():
-
-    async def predicate(ctx):
-        if ctx.author.id != ADMIN_ID:
-            try:
-                await ctx.message.delete()
-            except discord.Forbidden:
-                pass
-            raise SilentCheckFailure()  # This will be silently caught
-        return True
-
-    return commands.check(predicate)
-
 
 @bot.event
 async def on_ready():
@@ -2673,8 +2660,7 @@ async def adjust_points(ctx, member: discord.Member, action: str, amount: int,
 
 @bot.command(name="forcework",
              help="Ping everyone who hasn't logged work today (Admin only)")
-@admin_only()
-@commands.has_permissions(administrator=True)
+@is_admin()
 async def forcework(ctx):
     # Load all logs
     logs = load_logs()
@@ -2750,7 +2736,7 @@ async def touch_member(ctx, member: discord.Member):
 
 @bot.command(name="alllogs",
              help="View all users' logs with pagination (Admin only)")
-@admin_only()
+@is_admin()
 async def alllogs(ctx):
     """Admin command to view all logs in a paginated format"""
     logs = load_logs()
@@ -3190,7 +3176,7 @@ async def create_task(ctx):
 
 
 @bot.command(name="addlife", help="Add a life to a user (Admin only)")
-@admin_only()
+@is_admin()
 async def add_life(ctx, member: discord.Member):
     try:
         await ctx.message.delete()
@@ -3224,7 +3210,7 @@ async def add_life(ctx, member: discord.Member):
 
 
 @bot.command(name="removelife", help="Remove a life from a user (Admin only)")
-@admin_only()
+@is_admin()
 async def remove_life(ctx, member: discord.Member):
     try:
         await ctx.message.delete()
@@ -3313,7 +3299,6 @@ async def my_tasks(ctx):
 
 @bot.command(name="alltasks", help="View all tasks (Admin only)")
 @is_admin()
-@admin_only()
 async def all_tasks(ctx):
     embed = discord.Embed(title="📋 All Assigned Tasks",
                           color=COLORS["primary"])
@@ -3641,7 +3626,6 @@ Examples:
 !resetlogs 25 May - Reset logs for all users on May 25
 !resetlogs @user 25 May - Reset logs for specific user on May 25""")
 @is_admin()
-@admin_only()
 async def reset_logs(ctx, *, args: str = None):
     """Reset logs for a specific user, date, or combination of both."""
     logs = load_logs()
@@ -4056,7 +4040,7 @@ async def weekly_summary():
 
 @bot.command(name="forework",
              help="Ping users who haven't logged today (admin only)")
-@admin_only()
+@is_admin()
 async def forework(ctx):
     """Admin-only command to ping users who haven't logged work for the current day."""
     # If not admin, silently delete the message
@@ -4097,7 +4081,6 @@ async def forework(ctx):
 
     # 7. Backup System
 @bot.command(name="backup", help="Create a backup of all data (Admin only)")
-@admin_only()
 @is_admin()
 async def create_backup(ctx):
     # Create backup directory if it doesn't exist
