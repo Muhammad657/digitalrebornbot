@@ -282,8 +282,7 @@ async def on_command_error(ctx, error):
             description=f"An error occurred: {str(error)}",
             color=COLORS["error"])
         await ctx.send(embed=error_embed)
-        # Log the error for debugging
-        print(f"Error in command {ctx.command}: {error}", exc_info=True)
+
 
 
 def save_created_tasks(data):
