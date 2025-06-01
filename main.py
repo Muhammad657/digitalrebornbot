@@ -3878,61 +3878,6 @@ async def weekly_summary():
         embed.set_footer(text="Great work everyone! Keep it up!")
         await channel.send(embed=embed)
 
-
-# 6. User Profile Command
-@bot.command(name="profile", help="View your profile and stats")
-async def user_profile(ctx, member: discord.Member = None):
-    member = member or ctx.author
-
-    # Check permissions if viewing someone else's profile
-    if member != ctx.author and ctx.author.id != ADMIN_ID:
-        embed = create_error_embed(
-            "Permission Denied",
-            "You can only view your own profile unless you're an admin")
-        return await ctx.send(embed=embed)
-
-    logs = load_logs()
-    user_logs = logs.get(str(member.id), {})
-
-    embed = discord.Embed(title=f"👤 {member.display_name}'s Profile",
-                          color=COLORS["primary"],
-                          timestamp=datetime.now(EST))
-
-    if member.avatar:
-        embed.set_thumbnail(url=member.avatar.url)
-
-    # Basic info
-    embed.add_field(name="Member Since",
-                    value=member.joined_at.strftime("%B %d, %Y"),
-                    inline=True)
-
-    # Log stats
-    embed.add_field(name="Log Entries",
-                    value=f"{len(user_logs)} this week",
-                    inline=True)
-
-    # Task stats
-    assigned_tasks = len(bot.task_assignments.get(member.id, {}))
-    completed_tasks = sum(
-        1 for task in bot.task_assignments.get(member.id, {}).values()
-        if task.get("status") == "Completed")
-    embed.add_field(
-        name="Tasks",
-        value=f"Assigned: {assigned_tasks}\nCompleted: {completed_tasks}",
-        inline=True)
-
-    # Score if available
-    if member.id in bot.user_scores:
-        embed.add_field(name="Score",
-                        value=f"🏅 {bot.user_scores[member.id]} points",
-                        inline=True)
-
-    await ctx.send(embed=embed)
-
-
-from datetime import datetime
-
-
 @bot.command(name="forework",
              help="Ping users who haven't logged today (admin only)")
 @admin_only()
