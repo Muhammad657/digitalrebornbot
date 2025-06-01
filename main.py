@@ -579,40 +579,32 @@ class BadgeCreationModal(discord.ui.Modal, title="Create New Badge"):
         super().__init__()
         self.image_url = image_url
 
-        self.add_item(
-            discord.ui.TextInput(
-                label="Badge Name",
-                placeholder="Enter badge name...",
-                required=True,
-                max_length=50
-            )
-        )
-        self.add_item(
-            discord.ui.TextInput(
-                label="Description",
-                placeholder="What does this badge represent?",
-                style=discord.TextStyle.long,
-                required=True,
-                max_length=200
-            )
-        )
-        
+        self.add_item(discord.ui.TextInput(
+            label="Badge Name",
+            placeholder="Enter badge name...",
+            required=True,
+            max_length=50
+        ))
+        self.add_item(discord.ui.TextInput(
+            label="Description",
+            placeholder="What does this badge represent?",
+            style=discord.TextStyle.long,
+            required=True,
+            max_length=200
+        ))
         if not image_url:
-            self.add_item(
-                discord.ui.TextInput(
-                    label="Emoji/Image URL",
-                    placeholder="Enter emoji or image URL...",
-                    required=False
-                )
-            )
-        self.add_item(
-            discord.ui.TextInput(
-                label="Points Reward",
-                placeholder="Optional points to award (0 for none)",
-                required=False,
-                default="0"
-            )
-        )
+            self.add_item(discord.ui.TextInput(
+                label="Emoji/Image URL",
+                placeholder="Enter emoji or image URL...",
+                required=False
+            ))
+        self.add_item(discord.ui.TextInput(
+            label="Points Reward",
+            placeholder="Optional points to award (0 for none)",
+            required=False,
+            default="0"
+        ))
+        
     async def on_submit(self, interaction: discord.Interaction):
         try:
             badge_name = self.children[0].value
@@ -713,13 +705,19 @@ def award_badge(user_id: int, badge_id: str):
         return True
     return False
 
-@bot.command(name="createbadge", help="Create a new badge (Admin only)")
+@bot.tree.command(name="createbadge", description="Create a new badge (Admin only)")
 @is_admin()
-async def create_badge(ctx):
-    await ctx.send("📎 Please upload the image for the badge, or type `skip` to use text input instead.", delete_after=60)
+async def createbadge(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "📎 Please upload the image for the badge, or type `skip` to use text input instead.",
+        ephemeral=True
+    )
 
     def check(msg):
-        return msg.author.id == ctx.author.id and msg.channel == ctx.channel
+        return (
+            msg.author.id == interaction.user.id
+            and msg.channel == interaction.channel
+        )
 
     try:
         msg = await bot.wait_for("message", timeout=60, check=check)
@@ -729,13 +727,13 @@ async def create_badge(ctx):
         elif msg.content.strip().lower() == "skip":
             image_url = None
         else:
-            await ctx.send("❌ Invalid response. Please try again.", delete_after=10)
+            await interaction.followup.send("❌ Invalid response.", ephemeral=True)
             return
 
-        await ctx.send_modal(BadgeCreationModal(image_url=image_url))
+        await interaction.followup.send_modal(BadgeCreationModal(image_url=image_url))
 
     except asyncio.TimeoutError:
-        await ctx.send("⌛ Timed out. Please run the command again when ready.", delete_after=10)
+        await interaction.followup.send("⌛ Timed out. Please try again.", ephemeral=True)
 
 
 @bot.command(name="givebadge", help="Award a badge to a user (Admin only)")
