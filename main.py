@@ -705,35 +705,71 @@ def award_badge(user_id: int, badge_id: str):
         return True
     return False
 
-@bot.tree.command(name="createbadge", description="Create a new badge (Admin only)")
-@is_admin()
-async def createbadge(interaction: discord.Interaction):
-    await interaction.response.send_message(
-        "📎 Please upload the image for the badge, or type `skip` to use text input instead.",
-        ephemeral=True
-    )
-
-    def check(msg):
-        return (
-            msg.author.id == interaction.user.id
-            and msg.channel == interaction.channel
-        )
+@bot.command(name="createbadge", help="Create a new badge")
+@is_admin()  # Your admin check here
+async def createbadge(ctx):
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel
 
     try:
-        msg = await bot.wait_for("message", timeout=60, check=check)
+        # Ask for badge name
+        await ctx.send("📝 What is the name of the badge?")
+        name_msg = await bot.wait_for("message", timeout=60, check=check)
+        badge_name = name_msg.content.strip()
 
-        if msg.attachments:
-            image_url = msg.attachments[0].url
-        elif msg.content.strip().lower() == "skip":
+        # Ask for description
+        await ctx.send("💬 What's the description of the badge?")
+        desc_msg = await bot.wait_for("message", timeout=60, check=check)
+        description = desc_msg.content.strip()
+
+        # Ask for emoji or image
+        await ctx.send("📎 Upload an image or type an emoji. Type `skip` to skip.")
+        image_msg = await bot.wait_for("message", timeout=60, check=check)
+        if image_msg.attachments:
+            image_url = image_msg.attachments[0].url
+        elif image_msg.content.lower() == "skip":
             image_url = None
         else:
-            await interaction.followup.send("❌ Invalid response.", ephemeral=True)
-            return
+            image_url = image_msg.content.strip()
 
-        await interaction.followup.send_modal(BadgeCreationModal(image_url=image_url))
+        # Ask for points
+        await ctx.send("🎯 How many points should this badge give? Type a number or `0`.")
+        points_msg = await bot.wait_for("message", timeout=60, check=check)
+        points = int(points_msg.content.strip()) if points_msg.content.strip().isdigit() else 0
+
+        # Build the badge embed
+        embed = discord.Embed(
+            title="🛡️ New Badge Created",
+            description=f"**{badge_name}** has been added to the badge collection!",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Description", value=description, inline=False)
+        if image_url:
+            if image_url.startswith("http"):
+                embed.set_thumbnail(url=image_url)
+            else:
+                embed.add_field(name="Emoji", value=image_url, inline=True)
+        if points > 0:
+            embed.add_field(name="Points", value=str(points), inline=True)
+
+        await ctx.send(embed=embed)
+
+        # Save badge (you can adjust this)
+        badges = load_badges()
+        badge_id = str(len(badges) + 1)
+        badges[badge_id] = {
+            "name": badge_name,
+            "description": description,
+            "image": image_url,
+            "points": points,
+            "created_by": ctx.author.id,
+            "created_at": datetime.now(EST).isoformat()
+        }
+        save_badges(badges)
 
     except asyncio.TimeoutError:
-        await interaction.followup.send("⌛ Timed out. Please try again.", ephemeral=True)
+        await ctx.send("⏰ You took too long. Please try again.")
+
 
 
 @bot.command(name="givebadge", help="Award a badge to a user (Admin only)")
