@@ -1025,6 +1025,7 @@ async def on_interaction(interaction: discord.Interaction):
             return
 
         pages = []
+        user = await bot.fetch_user(int(user_id))
         for badge_id in user_badges:
             if badge_id in all_badges:
                 badge = all_badges[badge_id]
@@ -1033,6 +1034,7 @@ async def on_interaction(interaction: discord.Interaction):
                     description=badge.get("description", ""),
                     color=COLORS["primary"]
                 )
+                embed.set_author(name=f"{user.name}'s Badges", icon_url=user.avatar.url if user.avatar else None)
                 embed.add_field(name="Badge ID", value=badge_id)
                 if badge["image"].startswith("http"):
                     embed.set_thumbnail(url=badge["image"])
@@ -1041,6 +1043,7 @@ async def on_interaction(interaction: discord.Interaction):
                 embed.add_field(name="Points", value=str(badge.get("points", 0)))
                 pages.append(embed)
 
+        
         class Paginator(View):
             def __init__(self, pages):
                 super().__init__(timeout=120)
