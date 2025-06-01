@@ -3738,7 +3738,6 @@ async def reset_logs(ctx, *, args: str = None):
 
 @bot.command(name="removetask")
 @is_admin()
-@admin_only()
 async def remove_task(ctx, *, args: str = None):
     """Remove tasks for a specific user, task ID, or both."""
     if not args:
