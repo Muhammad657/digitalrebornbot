@@ -794,6 +794,7 @@ async def give_badge(ctx, member: discord.Member, badge_id: str):
             else:
                 embed.add_field(name="Emoji", value=badge["image"], inline=True)
         if badge.get("points", 0) > 0:
+            await update_leaderboard_channel()
             embed.add_field(name="Points Awarded", value=str(badge["points"]), inline=True)
             
         await ctx.send(embed=embed)
@@ -2519,15 +2520,22 @@ async def leaderboard(ctx):
     leaderboard_data = []
     for user_id, tasks in scores.items():
         total = sum(task.get("points", 0) for task in tasks.values())
-        leaderboard_data.append((int(user_id), total, tasks))
+        leaderboard_data.append((int(user_id), total, tasks))  # 3-tuple
 
     if not leaderboard_data:
         return await ctx.send("❌ No participants yet.")
 
+    # Sort descending by total points
     leaderboard_data.sort(key=lambda x: x[1], reverse=True)
-    view = LeaderboardView(leaderboard_data)
+
+    # Insert rank as the first element
+    ranked_data = [(rank + 1, user_id, total, tasks) for rank, (user_id, total, tasks) in enumerate(leaderboard_data)]
+
+    view = LeaderboardView(ranked_data)
     embed = view.create_embed()
     await ctx.send(embed=embed, view=view)
+
+
 
 
 @bot.command(name="adjustpoints",
@@ -4315,17 +4323,54 @@ class BadgePaginator(View):
         await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
 
-@bot.command(name="allbadges", help="Show all badges of a user")
+@bot.command(name="allbadges", help="View all badges of a user")
 async def all_badges(ctx, member: discord.Member = None):
     member = member or ctx.author
+
     user_badges = load_user_badges().get(str(member.id), [])
-    badges = load_badges()
+    all_badges = load_badges()
 
     if not user_badges:
-        return await ctx.send(f"❌ {member.display_name} has no badges.")
+        await ctx.send(f"{member.display_name} has no badges.")
+        return
 
-    paginator = BadgePaginator(user_badges, badges)
-    await ctx.send(embed=paginator.create_embed(), view=paginator)
+    pages = []
+    for badge_id in user_badges:
+        if badge_id in all_badges:
+            badge = all_badges[badge_id]
+            embed = discord.Embed(
+                title=f"🏅 {badge['name']}",
+                description=badge.get("description", "No description"),
+                color=COLORS["primary"]
+            )
+            embed.set_author(name=f"{member.display_name}'s Badges", icon_url=member.avatar.url if member.avatar else None)
+            embed.add_field(name="Badge ID", value=badge_id)
+            embed.add_field(name="Points", value=str(badge.get("points", 0)))
+
+            if badge.get("image", "").startswith("http"):
+                embed.set_thumbnail(url=badge["image"])
+            else:
+                embed.add_field(name="Emoji", value=badge["image"], inline=False)
+
+            pages.append(embed)
+
+    class Paginator(View):
+        def __init__(self, pages):
+            super().__init__(timeout=120)
+            self.pages = pages
+            self.index = 0
+
+        @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
+        async def previous(self, interaction, button):
+            self.index = (self.index - 1) % len(self.pages)
+            await interaction.response.edit_message(embed=self.pages[self.index], view=self)
+
+        @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
+        async def next(self, interaction, button):
+            self.index = (self.index + 1) % len(self.pages)
+            await interaction.response.edit_message(embed=self.pages[self.index], view=self)
+
+    await ctx.send(embed=pages[0], view=Paginator(pages))
 
 
 @bot.command(name="sync", help="testing sync" )
