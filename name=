@@ -4082,6 +4082,11 @@ async def task_chart(ctx):
     await ctx.send(embed=embed)
     await update_task_channel()
 
+@bot.command(name="sync", help="testing sync" )
+@is_admin()
+async def sync(ctx):
+    await bot.tree.sync()
+    await ctx.send("Commands synced!")
 
 # 10. Task Reminder Configuration
 @bot.command(name="taskreminders", help="Configure your task reminders")
