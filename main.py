@@ -1755,6 +1755,7 @@ def admin_only():
 async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
 
+    await bot.tree.sync()
     # --- Load Data ---
     try:
         with open("scores.json", "r") as f:
