@@ -1755,7 +1755,10 @@ def admin_only():
 async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
 
-    await bot.tree.sync()
+    GUILD_ID = 1353179636896632832  # Replace this with your server's ID
+    guild = discord.Object(id=GUILD_ID)
+    await bot.tree.sync(guild=guild)
+    
     # --- Load Data ---
     try:
         with open("scores.json", "r") as f:
