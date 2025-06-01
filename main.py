@@ -983,16 +983,21 @@ async def user_profile(ctx, member: discord.Member = None):
 
     if user_badges:
         badge_list = []
-        for badge_id in user_badges[:5]:  # Show first 5 badges
+        for badge_id in user_badges[:5]:
             if badge_id in badges:
                 badge = badges[badge_id]
-                display = (badge.get("image") or "🛡️") + " " + badge["name"]
+                emoji_or_icon = badge.get("image")
+                if emoji_or_icon and emoji_or_icon.startswith("http"):
+                    emoji_or_icon = "🏅"
+                elif not emoji_or_icon:
+                    emoji_or_icon = "🛡️"
+                display = f"{emoji_or_icon} {badge['name']}"
                 badge_list.append(display)
-
+    
         badge_text = "\n".join(badge_list)
         if len(user_badges) > 5:
-            badge_text += f"\n...and {len(user_badges)-5} more"
-
+            badge_text += f"\n...and {len(user_badges) - 5} more"
+    
         embed.add_field(
             name=f"Badges ({len(user_badges)})",
             value=badge_text,
@@ -4258,6 +4263,66 @@ async def remove_badge(ctx, member: discord.Member, badge_id: str):
         json.dump(user_badges, f, indent=4)
     
     await ctx.send(f"✅ Removed badge `{badge_id}` from {member.display_name}.")
+
+
+from discord.ext import commands
+from discord.ui import View, Button
+import discord
+
+class BadgePaginator(View):
+    def __init__(self, badges_list, all_badges):
+        super().__init__(timeout=120)
+        self.badges_list = badges_list
+        self.all_badges = all_badges
+        self.index = 0
+
+    def create_embed(self):
+        badge_id = self.badges_list[self.index]
+        badge = self.all_badges.get(badge_id, None)
+        if not badge:
+            embed = discord.Embed(title="Badge not found", color=discord.Color.red())
+            return embed
+
+        embed = discord.Embed(
+            title=f"🏅 Badge: {badge['name']}",
+            description=badge.get("description", "No description"),
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Badge ID", value=badge_id)
+        embed.add_field(name="Points", value=str(badge.get("points", 0)))
+
+        image_url = badge.get("image")
+        if image_url:
+            if image_url.startswith("http"):
+                embed.set_thumbnail(url=image_url)
+            else:
+                embed.add_field(name="Emoji", value=image_url)
+
+        embed.set_footer(text=f"Badge {self.index + 1} of {len(self.badges_list)}")
+        return embed
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
+    async def previous(self, interaction: discord.Interaction, button: Button):
+        self.index = (self.index - 1) % len(self.badges_list)
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
+    async def next(self, interaction: discord.Interaction, button: Button):
+        self.index = (self.index + 1) % len(self.badges_list)
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+
+@bot.command(name="allbadges", help="Show all badges of a user")
+async def all_badges(ctx, member: discord.Member = None):
+    member = member or ctx.author
+    user_badges = load_user_badges().get(str(member.id), [])
+    badges = load_badges()
+
+    if not user_badges:
+        return await ctx.send(f"❌ {member.display_name} has no badges.")
+
+    paginator = BadgePaginator(user_badges, badges)
+    await ctx.send(embed=paginator.create_embed(), view=paginator)
 
 
 @bot.command(name="sync", help="testing sync" )
