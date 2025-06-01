@@ -986,7 +986,7 @@ async def user_profile(ctx, member: discord.Member = None):
         for badge_id in user_badges[:5]:  # Show first 5 badges
             if badge_id in badges:
                 badge = badges[badge_id]
-                display = badge.get("image", "🛡️") + " " + badge["name"]
+                display = (badge.get("image") or "🛡️") + " " + badge["name"]
                 badge_list.append(display)
 
         badge_text = "\n".join(badge_list)
@@ -4241,6 +4241,24 @@ async def task_chart(ctx):
     embed.set_footer(text=f"Total tasks: {len(user_tasks)}")
     await ctx.send(embed=embed)
     await update_task_channel()
+
+
+@bot.command(name="removebadge", help="Remove a badge from a user (admin only)")
+@is_admin()
+async def remove_badge(ctx, member: discord.Member, badge_id: str):
+    user_badges = load_user_badges()
+    user_id_str = str(member.id)
+    
+    if user_id_str not in user_badges or badge_id not in user_badges[user_id_str]:
+        return await ctx.send(f"❌ {member.display_name} does not have the badge with ID `{badge_id}`.")
+    
+    user_badges[user_id_str].remove(badge_id)
+    # Save changes
+    with open("user_badges.json", "w") as f:  # Adjust filename if needed
+        json.dump(user_badges, f, indent=4)
+    
+    await ctx.send(f"✅ Removed badge `{badge_id}` from {member.display_name}.")
+
 
 @bot.command(name="sync", help="testing sync" )
 @is_admin()
