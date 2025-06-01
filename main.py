@@ -934,6 +934,18 @@ async def end_work(ctx, proof: Optional[str] = None):
     save_work_sessions(sessions)
 
 # Update the profile command to show badges
+from discord.ui import View, Button
+
+class BadgeListView(View):
+    def __init__(self, user_id):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.badges = load_user_badges().get(str(user_id), [])
+        self.all_badges = load_badges()
+
+        if len(self.badges) > 0:
+            self.add_item(Button(label="View All Badges", style=discord.ButtonStyle.primary, custom_id=f"view_badges_{user_id}"))
+
 @bot.command(name="profile", help="View your profile and stats")
 async def user_profile(ctx, member: discord.Member = None):
     member = member or ctx.author
@@ -986,11 +998,7 @@ async def user_profile(ctx, member: discord.Member = None):
             value=badge_text,
             inline=False
         )
-
-        view = View()
-        view.add_item(ViewBadgesButton(user_badges, badges))
-        await ctx.send(embed=embed, view=view)
-
+        await ctx.send(embed=embed, view=BadgeListView(member.id))
     else:
         embed.add_field(
             name="Badges",
@@ -998,6 +1006,54 @@ async def user_profile(ctx, member: discord.Member = None):
             inline=False
         )
         await ctx.send(embed=embed)
+
+
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    if interaction.data.get("custom_id", "").startswith("view_badges_"):
+        user_id = interaction.data["custom_id"].split("_")[-1]
+        user_badges = load_user_badges().get(user_id, [])
+        all_badges = load_badges()
+
+        if not user_badges:
+            await interaction.response.send_message("No badges to display!", ephemeral=True)
+            return
+
+        pages = []
+        for badge_id in user_badges:
+            if badge_id in all_badges:
+                badge = all_badges[badge_id]
+                embed = discord.Embed(
+                    title=f"🏅 Badge: {badge['name']}",
+                    description=badge.get("description", ""),
+                    color=COLORS["primary"]
+                )
+                embed.add_field(name="Badge ID", value=badge_id)
+                if badge["image"].startswith("http"):
+                    embed.set_thumbnail(url=badge["image"])
+                else:
+                    embed.add_field(name="Emoji", value=badge["image"])
+                embed.add_field(name="Points", value=str(badge.get("points", 0)))
+                pages.append(embed)
+
+        class Paginator(View):
+            def __init__(self, pages):
+                super().__init__(timeout=120)
+                self.pages = pages
+                self.index = 0
+
+            @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
+            async def previous(self, interaction, button):
+                self.index = (self.index - 1) % len(self.pages)
+                await interaction.response.edit_message(embed=self.pages[self.index], view=self)
+
+            @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary)
+            async def next(self, interaction, button):
+                self.index = (self.index + 1) % len(self.pages)
+                await interaction.response.edit_message(embed=self.pages[self.index], view=self)
+
+        await interaction.response.send_message(embed=pages[0], view=Paginator(pages), ephemeral=True)
+
 
 
 
