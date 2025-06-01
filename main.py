@@ -970,23 +970,38 @@ async def user_profile(ctx, member: discord.Member = None):
     )
 
     if user_badges:
-        sample = []
-        for badge_id in user_badges[:3]:
-            badge = badges.get(badge_id)
-            if badge:
-                sample.append(badge.get("image", "🏅") + " " + badge["name"])
-        badge_text = "\n".join(sample)
-        if len(user_badges) > 3:
-            badge_text += f"\n...and `{len(user_badges) - 3}` more"
+        badge_list = []
+        for badge_id in user_badges[:5]:  # Show first 5 badges
+            if badge_id in badges:
+                badge = badges[badge_id]
+                display = badge.get("image", "🛡️") + " " + badge["name"]
+                badge_list.append(display)
 
-        embed.add_field(name=f"Badges ({len(user_badges)})", value=badge_text, inline=False)
+        badge_text = "\n".join(badge_list)
+        if len(user_badges) > 5:
+            badge_text += f"\n...and {len(user_badges)-5} more"
+
+        embed.add_field(
+            name=f"Badges ({len(user_badges)})",
+            value=badge_text,
+            inline=False
+        )
 
         view = View()
         view.add_item(ViewBadgesButton(user_badges, badges))
         await ctx.send(embed=embed, view=view)
+
     else:
-        embed.add_field(name="Badges", value="No badges yet. Complete tasks to earn some!", inline=False)
+        embed.add_field(
+            name="Badges",
+            value="No badges yet. Complete tasks to earn some!",
+            inline=False
+        )
         await ctx.send(embed=embed)
+
+
+
+from discord.ui import Button, View
 
 class ViewBadgesButton(Button):
     def __init__(self, user_badges, all_badges):
@@ -995,54 +1010,74 @@ class ViewBadgesButton(Button):
         self.all_badges = all_badges
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message(
-            embed=self.create_badge_embed(0),
-            view=BadgePagination(self.user_badges, self.all_badges, 0),
-            ephemeral=True
-        )
+        if not self.user_badges:
+            return await interaction.response.send_message("❌ No badges to show.", ephemeral=True)
+
+        embed = self.create_badge_embed(0)
+        view = BadgePagination(self.user_badges, self.all_badges, 0)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     def create_badge_embed(self, index):
         badge_id = self.user_badges[index]
         badge = self.all_badges.get(badge_id, {})
+
         embed = discord.Embed(
             title=f"🏅 {badge.get('name', 'Unknown Badge')}",
-            description=badge.get("description", "No description."),
+            description=badge.get("description", 'No description.'),
             color=COLORS["secondary"]
         )
-        if badge.get("image", "").startswith("http"):
-            embed.set_thumbnail(url=badge["image"])
-        elif badge.get("image"):
-            embed.description = f"{badge['image']} {badge['description']}"
-        embed.set_footer(text=f"Badge {index+1} of {len(self.user_badges)}")
+
+        image_url = badge.get("image", "")
+        if image_url.startswith("http"):
+            embed.set_thumbnail(url=image_url)
+        elif image_url:
+            embed.description = f"{image_url} {embed.description}"
+
+        embed.set_footer(text=f"Badge {index + 1} of {len(self.user_badges)}")
         return embed
+
 
 class BadgePagination(View):
     def __init__(self, user_badges, all_badges, index):
-        super().__init__()
+        super().__init__(timeout=60)
         self.user_badges = user_badges
         self.all_badges = all_badges
         self.index = index
 
-        self.prev_button = Button(label="⬅️ Previous", style=discord.ButtonStyle.secondary)
-        self.next_button = Button(label="➡️ Next", style=discord.ButtonStyle.secondary)
+        self.add_item(Button(label="⬅️ Previous", style=discord.ButtonStyle.secondary, disabled=index == 0))
+        self.add_item(Button(label="➡️ Next", style=discord.ButtonStyle.secondary, disabled=index == len(user_badges) - 1))
 
-        self.prev_button.callback = self.prev_page
-        self.next_button.callback = self.next_page
+        self.children[0].callback = self.prev_page
+        self.children[1].callback = self.next_page
 
-        if index > 0:
-            self.add_item(self.prev_button)
-        if index < len(user_badges) - 1:
-            self.add_item(self.next_button)
+    def get_embed(self, index):
+        badge_id = self.user_badges[index]
+        badge = self.all_badges.get(badge_id, {})
+
+        embed = discord.Embed(
+            title=f"🏅 {badge.get('name', 'Unknown Badge')}",
+            description=badge.get("description", 'No description.'),
+            color=COLORS["secondary"]
+        )
+
+        image_url = badge.get("image", "")
+        if image_url.startswith("http"):
+            embed.set_thumbnail(url=image_url)
+        elif image_url:
+            embed.description = f"{image_url} {embed.description}"
+
+        embed.set_footer(text=f"Badge {index + 1} of {len(self.user_badges)}")
+        return embed
 
     async def prev_page(self, interaction: discord.Interaction):
-        new_index = self.index - 1
-        embed = ViewBadgesButton(self.user_badges, self.all_badges).create_badge_embed(new_index)
-        await interaction.response.edit_message(embed=embed, view=BadgePagination(self.user_badges, self.all_badges, new_index))
+        self.index -= 1
+        embed = self.get_embed(self.index)
+        await interaction.response.edit_message(embed=embed, view=BadgePagination(self.user_badges, self.all_badges, self.index))
 
     async def next_page(self, interaction: discord.Interaction):
-        new_index = self.index + 1
-        embed = ViewBadgesButton(self.user_badges, self.all_badges).create_badge_embed(new_index)
-        await interaction.response.edit_message(embed=embed, view=BadgePagination(self.user_badges, self.all_badges, new_index))
+        self.index += 1
+        embed = self.get_embed(self.index)
+        await interaction.response.edit_message(embed=embed, view=BadgePagination(self.user_badges, self.all_badges, self.index))
 
 
 class TaskCreationModal(discord.ui.Modal, title="Create New Task"):
