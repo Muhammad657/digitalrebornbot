@@ -103,7 +103,25 @@ def is_admin():
 LOG_FILE = "daily_logs.json"
 TASKS_FILE = "tasks.json"
 COMMENTS_FILE = "comments.json"
+# Add these constants near the top with other constants
+BADGES_FILE = "badges.json"
+WORK_SESSIONS_FILE = "work_sessions.json"
+ 
+# Add to your bot class
+self.user_levels = {}  # user_id: level
+self.user_xp = {}      # user_id: xp
 
+async def award_xp(self, user_id, amount):
+    self.user_xp[user_id] = self.user_xp.get(user_id, 0) + amount
+    xp_needed = 100 * (self.user_levels.get(user_id, 0) + 1)
+    if self.user_xp[user_id] >= xp_needed:
+        self.user_levels[user_id] = self.user_levels.get(user_id, 0) + 1
+        await self.notify_level_up(user_id)
+
+async def notify_level_up(self, user_id):
+    user = await self.fetch_user(user_id)
+    channel = self.get_channel(CHANNEL_ID)
+    await channel.send(f"🎉 {user.mention} leveled up to level {self.user_levels[user_id]}!")
 
 def with_parsed_date(param_name: str):
     """Decorator to parse a date parameter flexibly."""
@@ -551,6 +569,413 @@ class TaskPaginatedView(discord.ui.View):
                                                     view=self)
         else:
             await interaction.response.defer()
+# Add these constants near the top with other constants
+BADGES_FILE = "badges.json"
+WORK_SESSIONS_FILE = "work_sessions.json"
+
+# Add these classes near your other UI components
+class BadgeCreationModal(discord.ui.Modal, title="Create New Badge"):
+    def __init__(self, image_url=None):
+        super().__init__()
+        self.image_url = image_url
+
+        self.add_item(
+            discord.ui.TextInput(
+                label="Badge Name",
+                placeholder="Enter badge name...",
+                required=True,
+                max_length=50
+            )
+        )
+        self.add_item(
+            discord.ui.TextInput(
+                label="Description",
+                placeholder="What does this badge represent?",
+                style=discord.TextStyle.long,
+                required=True,
+                max_length=200
+            )
+        )
+        
+        if not image_url:
+            self.add_item(
+                discord.ui.TextInput(
+                    label="Emoji/Image URL",
+                    placeholder="Enter emoji or image URL...",
+                    required=False
+                )
+            )
+        self.add_item(
+            discord.ui.TextInput(
+                label="Points Reward",
+                placeholder="Optional points to award (0 for none)",
+                required=False,
+                default="0"
+            )
+        )
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            badge_name = self.children[0].value
+            description = self.children[1].value
+            emoji_or_url = self.children[2].value.strip() or None
+            points = int(self.children[3].value) if self.children[3].value.isdigit() else 0
+            
+            badges = load_badges()
+            badge_id = str(len(badges) + 1)
+            
+            badges[badge_id] = {
+                "name": badge_name,
+                "description": description,
+                "image": emoji_or_url,
+                "points": points,
+                "created_by": interaction.user.id,
+                "created_at": datetime.now(EST).isoformat()
+            }
+            
+            save_badges(badges)
+            
+            embed = discord.Embed(
+                title="🛡️ New Badge Created",
+                description=f"**{badge_name}** has been added to the badge collection!",
+                color=COLORS["success"]
+            )
+            embed.add_field(name="Description", value=description, inline=False)
+            if emoji_or_url:
+                if emoji_or_url.startswith("http"):
+                    embed.set_thumbnail(url=emoji_or_url)
+                else:
+                    embed.add_field(name="Emoji", value=emoji_or_url, inline=True)
+            if points > 0:
+                embed.add_field(name="Points Reward", value=str(points), inline=True)
+                
+            await interaction.response.send_message(embed=embed)
+            
+        except Exception as e:
+            await interaction.response.send_message(
+                f"❌ Error creating badge: {str(e)}",
+                ephemeral=True
+            )
+
+# Add these helper functions
+def load_badges():
+    try:
+        with open(BADGES_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_badges(badges):
+    with open(BADGES_FILE, "w") as f:
+        json.dump(badges, f, indent=4)
+
+def load_work_sessions():
+    try:
+        with open(WORK_SESSIONS_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_work_sessions(sessions):
+    with open(WORK_SESSIONS_FILE, "w") as f:
+        json.dump(sessions, f, indent=4)
+
+def load_user_badges():
+    try:
+        with open("user_badges.json", "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_user_badges(user_badges):
+    with open("user_badges.json", "w") as f:
+        json.dump(user_badges, f, indent=4)
+
+def award_badge(user_id: int, badge_id: str):
+    badges = load_badges()
+    user_badges = load_user_badges()
+    
+    if badge_id not in badges:
+        return False
+    
+    if str(user_id) not in user_badges:
+        user_badges[str(user_id)] = []
+    
+    if badge_id not in user_badges[str(user_id)]:
+        user_badges[str(user_id)].append(badge_id)
+        save_user_badges(user_badges)
+        
+        # Award points if badge has them
+        if badges[badge_id].get("points", 0) > 0:
+            award_points(str(user_id), f"badge_{badge_id}", 
+                         badges[badge_id]["points"],
+                         f"Earned badge: {badges[badge_id]['name']}")
+        
+        return True
+    return False
+
+@bot.command(name="createbadge", help="Create a new badge (Admin only)")
+@is_admin()
+async def create_badge(ctx):
+    await ctx.send("📎 Please upload the image for the badge, or type `skip` to use text input instead.", delete_after=60)
+
+    def check(msg):
+        return msg.author.id == ctx.author.id and msg.channel == ctx.channel
+
+    try:
+        msg = await bot.wait_for("message", timeout=60, check=check)
+
+        if msg.attachments:
+            image_url = msg.attachments[0].url
+        elif msg.content.strip().lower() == "skip":
+            image_url = None
+        else:
+            await ctx.send("❌ Invalid response. Please try again.", delete_after=10)
+            return
+
+        await ctx.send_modal(BadgeCreationModal(image_url=image_url))
+
+    except asyncio.TimeoutError:
+        await ctx.send("⌛ Timed out. Please run the command again when ready.", delete_after=10)
+
+
+@bot.command(name="givebadge", help="Award a badge to a user (Admin only)")
+@is_admin()
+async def give_badge(ctx, member: discord.Member, badge_id: str):
+    """Admin command to award a badge to a user"""
+    badges = load_badges()
+    if badge_id not in badges:
+        return await ctx.send("❌ Badge ID not found.")
+    
+    if award_badge(member.id, badge_id):
+        badge = badges[badge_id]
+        embed = discord.Embed(
+            title="🏆 Badge Awarded!",
+            description=f"{member.mention} has earned the **{badge['name']}** badge!",
+            color=COLORS["highlight"]
+        )
+        embed.add_field(name="Description", value=badge["description"], inline=False)
+        if badge.get("image"):
+            if badge["image"].startswith("http"):
+                embed.set_thumbnail(url=badge["image"])
+            else:
+                embed.add_field(name="Emoji", value=badge["image"], inline=True)
+        if badge.get("points", 0) > 0:
+            embed.add_field(name="Points Awarded", value=str(badge["points"]), inline=True)
+            
+        await ctx.send(embed=embed)
+    else:
+        await ctx.send("❌ User already has this badge.")
+
+@bot.command(name="badges", help="List all available badges")
+async def list_badges(ctx):
+    """List all badges in the system"""
+    badges = load_badges()
+    if not badges:
+        return await ctx.send("ℹ️ No badges have been created yet.")
+    
+    embed = discord.Embed(
+        title="🛡️ Available Badges",
+        description="Here are all the badges you can earn:",
+        color=COLORS["primary"]
+    )
+    
+    for badge_id, badge in badges.items():
+        value = badge["description"]
+        if badge.get("points", 0) > 0:
+            value += f"\n🔹 Reward: {badge['points']} points"
+        embed.add_field(
+            name=f"{badge_id}. {badge['name']}",
+            value=value,
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="startwork", help="Start a work session to earn points")
+async def start_work(ctx):
+    """Start tracking a work session"""
+    sessions = load_work_sessions()
+    user_id = str(ctx.author.id)
+    
+    if user_id in sessions and "start_time" in sessions[user_id]:
+        return await ctx.send("❌ You already have an active work session!")
+    
+    sessions[user_id] = {
+        "start_time": datetime.now(EST).isoformat(),
+        "proof_message_id": ctx.message.id,
+        "proof_channel_id": ctx.channel.id
+    }
+    save_work_sessions(sessions)
+    
+    embed = discord.Embed(
+        title="⏱️ Work Session Started",
+        description="Your work session has begun! Use `!endwork` when you're done to earn points.",
+        color=COLORS["success"]
+    )
+    embed.set_footer(text="You'll need to provide proof of work when ending the session")
+    await ctx.send(embed=embed)
+
+@bot.command(name="endwork", help="End your work session and earn points")
+async def end_work(ctx, proof: Optional[str] = None):
+    """End a work session and earn points"""
+    sessions = load_work_sessions()
+    user_id = str(ctx.author.id)
+    
+    if user_id not in sessions or "start_time" not in sessions[user_id]:
+        return await ctx.send("❌ You don't have an active work session!")
+    
+    if not proof:
+        # Check if they attached any files
+        if not ctx.message.attachments:
+            return await ctx.send("❌ Please provide proof of your work (text description or file attachment)")
+    
+    start_time = datetime.fromisoformat(sessions[user_id]["start_time"])
+    end_time = datetime.now(EST)
+    duration = end_time - start_time
+    minutes = int(duration.total_seconds() / 60)
+    points = int(minutes * 0.5)  # 0.5 points per minute
+    
+    if points < 1:
+        points = 1  # Minimum 1 point
+    
+    # Verify proof if required
+    proof_text = ""
+    if proof:
+        proof_text = proof
+    elif ctx.message.attachments:
+        proof_text = " ".join([att.url for att in ctx.message.attachments])
+    else:
+        proof_text = "No proof provided"
+    
+    # Award points
+    session_id = f"work_{start_time.strftime('%Y%m%d_%H%M%S')}"
+    award_points(user_id, session_id, points, f"Work session: {minutes} minutes")
+    
+    # Save session details
+    sessions[user_id]["end_time"] = end_time.isoformat()
+    sessions[user_id]["duration_minutes"] = minutes
+    sessions[user_id]["points_earned"] = points
+    sessions[user_id]["proof"] = proof_text
+    save_work_sessions(sessions)
+    
+    # Check for badge eligibility
+    badges_earned = []
+    badges = load_badges()
+    
+    # Check for marathon badge (long session)
+    if minutes >= 120:  # 2+ hour session
+        for badge_id, badge in badges.items():
+            if "marathon" in badge["name"].lower():
+                if award_badge(ctx.author.id, badge_id):
+                    badges_earned.append(badge["name"])
+    
+    # Check for frequent worker badge (multiple sessions)
+    user_sessions = [s for s in sessions.values() if s.get("user_id") == user_id]
+    if len(user_sessions) >= 5:  # 5+ sessions
+        for badge_id, badge in badges.items():
+            if "dedicated" in badge["name"].lower():
+                if award_badge(ctx.author.id, badge_id):
+                    badges_earned.append(badge["name"])
+    
+    # Prepare response
+    embed = discord.Embed(
+        title="✅ Work Session Completed",
+        description=f"You worked for {minutes} minutes and earned {points} points!",
+        color=COLORS["success"]
+    )
+    embed.add_field(name="Proof Submitted", value=proof_text[:1000], inline=False)
+    
+    if badges_earned:
+        embed.add_field(
+            name="🏆 New Badges Earned!",
+            value="\n".join(badges_earned),
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+    await update_leaderboard_channel()
+    
+    # Clear the session
+    del sessions[user_id]
+    save_work_sessions(sessions)
+
+# Update the profile command to show badges
+@bot.command(name="profile", help="View your profile and stats")
+async def user_profile(ctx, member: discord.Member = None):
+    member = member or ctx.author
+
+    # Check permissions if viewing someone else's profile
+    if member != ctx.author and ctx.author.id != ADMIN_ID:
+        embed = create_error_embed(
+            "Permission Denied",
+            "You can only view your own profile unless you're an admin")
+        return await ctx.send(embed=embed)
+
+    logs = load_logs()
+    user_logs = logs.get(str(member.id), {})
+    user_badges = load_user_badges().get(str(member.id), [])
+    badges = load_badges()
+
+    embed = discord.Embed(
+        title=f"👤 {member.display_name}'s Profile",
+        color=COLORS["primary"],
+        timestamp=datetime.now(EST)
+    )
+
+    if member.avatar:
+        embed.set_thumbnail(url=member.avatar.url)
+
+    # Basic info
+    embed.add_field(
+        name="Member Since",
+        value=member.joined_at.strftime("%B %d, %Y"),
+        inline=True
+    )
+
+    # Log stats
+    embed.add_field(
+        name="Log Entries",
+        value=f"{len(user_logs)} this week",
+        inline=True
+    )
+
+    # Task stats
+    assigned_tasks = len(bot.task_assignments.get(member.id, {}))
+    completed_tasks = sum(
+        1 for task in bot.task_assignments.get(member.id, {}).values()
+        if task.get("status") == "Completed")
+    embed.add_field(
+        name="Tasks",
+        value=f"Assigned: {assigned_tasks}\nCompleted: {completed_tasks}",
+        inline=True
+    )
+
+    # Badges display
+    if user_badges:
+        badge_list = []
+        for badge_id in user_badges[:5]:  # Show first 5 badges
+            if badge_id in badges:
+                badge = badges[badge_id]
+                display = badge.get("image", "🛡️") + " " + badge["name"]
+                badge_list.append(display)
+        
+        badge_text = "\n".join(badge_list)
+        if len(user_badges) > 5:
+            badge_text += f"\n...and {len(user_badges)-5} more"
+        
+        embed.add_field(
+            name=f"Badges ({len(user_badges)})",
+            value=badge_text,
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="Badges",
+            value="No badges yet. Complete tasks to earn some!",
+            inline=False
+        )
+
+    await ctx.send(embed=embed)
 
 
 class TaskCreationModal(discord.ui.Modal, title="Create New Task"):
@@ -1712,6 +2137,42 @@ async def custom_help(ctx, command_name: str = None):
             await ctx.send("⚠️ Couldn't DM you admin commands",
                            delete_after=10)
 
+
+@bot.command(name="progress")
+async def show_progress(ctx):
+    xp = bot.user_xp.get(ctx.author.id, 0)
+    level = bot.user_levels.get(ctx.author.id, 0)
+    xp_needed = 100 * (level + 1)
+    progress = int((xp / xp_needed) * 20)
+    
+    bar = "[" + "█" * progress + "░" * (20 - progress) + "]"
+    embed = discord.Embed(title=f"{ctx.author.display_name}'s Progress",
+                         description=f"Level {level}\n{bar} {xp}/{xp_needed} XP",
+                         color=COLORS["primary"])
+    await ctx.send(embed=embed)
+
+
+weekly_challenges = {
+    "task_master": {
+        "goal": 5,
+        "reward": 50,
+        "desc": "Complete 5 tasks this week"
+    },
+    "log_king": {
+        "goal": 7,
+        "reward": 70,
+        "desc": "Log work 7 days in a row"
+    }
+}
+
+@bot.command(name="challenges")
+async def show_challenges(ctx):
+    embed = discord.Embed(title="Weekly Challenges", color=COLORS["highlight"])
+    for name, challenge in weekly_challenges.items():
+        embed.add_field(name=challenge["desc"],
+                       value=f"Reward: {challenge['reward']} XP",
+                       inline=False)
+    await ctx.send(embed=embed)
 
 @bot.command(name="tasks", help="Show your tasks (admins can check others)")
 @commands.guild_only()
