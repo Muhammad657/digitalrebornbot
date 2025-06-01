@@ -705,71 +705,67 @@ def award_badge(user_id: int, badge_id: str):
         return True
     return False
 
-@bot.command(name="createbadge", help="Create a new badge")
-@is_admin()  # Your admin check here
+@bot.command(name="createbadge", help="Create a new badge (Admin only)")
+@is_admin()
 async def createbadge(ctx):
-    def check(m):
+    def check_author(m):
         return m.author == ctx.author and m.channel == ctx.channel
 
     try:
-        # Ask for badge name
-        await ctx.send("📝 What is the name of the badge?")
-        name_msg = await bot.wait_for("message", timeout=60, check=check)
+        await ctx.send("🏷️ What is the **name** of the badge?")
+        name_msg = await bot.wait_for("message", check=check_author, timeout=60)
         badge_name = name_msg.content.strip()
 
-        # Ask for description
-        await ctx.send("💬 What's the description of the badge?")
-        desc_msg = await bot.wait_for("message", timeout=60, check=check)
+        await ctx.send("📝 What is the **description** of the badge?")
+        desc_msg = await bot.wait_for("message", check=check_author, timeout=120)
         description = desc_msg.content.strip()
 
-        # Ask for emoji or image
-        await ctx.send("📎 Upload an image or type an emoji. Type `skip` to skip.")
-        image_msg = await bot.wait_for("message", timeout=60, check=check)
-        if image_msg.attachments:
-            image_url = image_msg.attachments[0].url
-        elif image_msg.content.lower() == "skip":
-            image_url = None
+        await ctx.send("📎 Please **upload an image** or emoji for the badge, or type `skip` to leave it blank.")
+        img_msg = await bot.wait_for("message", check=check_author, timeout=60)
+        if img_msg.attachments:
+            image = img_msg.attachments[0].url
+        elif img_msg.content.lower().strip() == "skip":
+            image = None
         else:
-            image_url = image_msg.content.strip()
+            image = img_msg.content.strip()
 
-        # Ask for points
-        await ctx.send("🎯 How many points should this badge give? Type a number or `0`.")
-        points_msg = await bot.wait_for("message", timeout=60, check=check)
-        points = int(points_msg.content.strip()) if points_msg.content.strip().isdigit() else 0
+        await ctx.send("🎯 How many **points** does this badge give? (Enter a number or `0`)")
+        points_msg = await bot.wait_for("message", check=check_author, timeout=30)
+        points = int(points_msg.content) if points_msg.content.isdigit() else 0
 
-        # Build the badge embed
-        embed = discord.Embed(
-            title="🛡️ New Badge Created",
-            description=f"**{badge_name}** has been added to the badge collection!",
-            color=discord.Color.green()
-        )
-        embed.add_field(name="Description", value=description, inline=False)
-        if image_url:
-            if image_url.startswith("http"):
-                embed.set_thumbnail(url=image_url)
-            else:
-                embed.add_field(name="Emoji", value=image_url, inline=True)
-        if points > 0:
-            embed.add_field(name="Points", value=str(points), inline=True)
-
-        await ctx.send(embed=embed)
-
-        # Save badge (you can adjust this)
         badges = load_badges()
         badge_id = str(len(badges) + 1)
+
         badges[badge_id] = {
             "name": badge_name,
             "description": description,
-            "image": image_url,
+            "image": image,
             "points": points,
             "created_by": ctx.author.id,
             "created_at": datetime.now(EST).isoformat()
         }
+
         save_badges(badges)
 
-    except asyncio.TimeoutError:
-        await ctx.send("⏰ You took too long. Please try again.")
+        embed = discord.Embed(
+            title="🛡️ New Badge Created",
+            description=f"**{badge_name}** has been added to the badge collection!",
+            color=COLORS["success"]
+        )
+        embed.add_field(name="Description", value=description, inline=False)
+        if image:
+            if image.startswith("http"):
+                embed.set_thumbnail(url=image)
+            else:
+                embed.add_field(name="Emoji", value=image, inline=True)
+        if points > 0:
+            embed.add_field(name="Points Reward", value=str(points), inline=True)
+        embed.add_field(name="Badge ID", value=badge_id, inline=True)
 
+        await ctx.send(embed=embed)
+
+    except asyncio.TimeoutError:
+        await ctx.send("⏰ You took too long. Badge creation canceled.")
 
 
 @bot.command(name="givebadge", help="Award a badge to a user (Admin only)")
@@ -4117,6 +4113,29 @@ async def task_chart(ctx):
     embed.set_footer(text=f"Total tasks: {len(user_tasks)}")
     await ctx.send(embed=embed)
     await update_task_channel()
+
+@bot.command(name="viewallwork", help="(Admin) View all users' work sessions")
+@is_admin()
+async def view_all_work(ctx):
+    sessions = load_work_sessions()
+
+    if not sessions:
+        return await ctx.send("⚠️ No work sessions found.")
+
+    for user_id, session in sessions.items():
+        user = await bot.fetch_user(int(user_id))
+        embed = discord.Embed(
+            title=f"🧾 Work Log for {user.display_name}",
+            color=COLORS["info"]
+        )
+        embed.add_field(name="Started", value=session.get("start_time", "N/A"), inline=True)
+        embed.add_field(name="Ended", value=session.get("end_time", "N/A"), inline=True)
+        embed.add_field(name="Duration", value=f"{session.get('duration_minutes', 0)} mins", inline=True)
+        embed.add_field(name="Points", value=str(session.get("points_earned", 0)), inline=True)
+        embed.add_field(name="Proof", value=session.get("proof", "No proof"), inline=False)
+
+        await ctx.send(embed=embed)
+
 
 @bot.command(name="sync", help="testing sync" )
 @is_admin()
