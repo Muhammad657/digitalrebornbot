@@ -705,67 +705,71 @@ def award_badge(user_id: int, badge_id: str):
         return True
     return False
 
-@bot.command(name="createbadge", help="Create a new badge (Admin only)")
-@is_admin()
+@bot.command(name="createbadge", help="Create a new badge")
+@is_admin()  # Your admin check here
 async def createbadge(ctx):
-    def check_author(m):
+    def check(m):
         return m.author == ctx.author and m.channel == ctx.channel
 
     try:
-        await ctx.send("🏷️ What is the **name** of the badge?")
-        name_msg = await bot.wait_for("message", check=check_author, timeout=60)
+        # Ask for badge name
+        await ctx.send("📝 What is the name of the badge?")
+        name_msg = await bot.wait_for("message", timeout=60, check=check)
         badge_name = name_msg.content.strip()
 
-        await ctx.send("📝 What is the **description** of the badge?")
-        desc_msg = await bot.wait_for("message", check=check_author, timeout=120)
+        # Ask for description
+        await ctx.send("💬 What's the description of the badge?")
+        desc_msg = await bot.wait_for("message", timeout=60, check=check)
         description = desc_msg.content.strip()
 
-        await ctx.send("📎 Please **upload an image** or emoji for the badge, or type `skip` to leave it blank.")
-        img_msg = await bot.wait_for("message", check=check_author, timeout=60)
-        if img_msg.attachments:
-            image = img_msg.attachments[0].url
-        elif img_msg.content.lower().strip() == "skip":
-            image = None
+        # Ask for emoji or image
+        await ctx.send("📎 Upload an image or type an emoji. Type `skip` to skip.")
+        image_msg = await bot.wait_for("message", timeout=60, check=check)
+        if image_msg.attachments:
+            image_url = image_msg.attachments[0].url
+        elif image_msg.content.lower() == "skip":
+            image_url = None
         else:
-            image = img_msg.content.strip()
+            image_url = image_msg.content.strip()
 
-        await ctx.send("🎯 How many **points** does this badge give? (Enter a number or `0`)")
-        points_msg = await bot.wait_for("message", check=check_author, timeout=30)
-        points = int(points_msg.content) if points_msg.content.isdigit() else 0
+        # Ask for points
+        await ctx.send("🎯 How many points should this badge give? Type a number or `0`.")
+        points_msg = await bot.wait_for("message", timeout=60, check=check)
+        points = int(points_msg.content.strip()) if points_msg.content.strip().isdigit() else 0
 
+        # Build the badge embed
+        embed = discord.Embed(
+            title="🛡️ New Badge Created",
+            description=f"**{badge_name}** has been added to the badge collection!",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Description", value=description, inline=False)
+        if image_url:
+            if image_url.startswith("http"):
+                embed.set_thumbnail(url=image_url)
+            else:
+                embed.add_field(name="Emoji", value=image_url, inline=True)
+        if points > 0:
+            embed.add_field(name="Points", value=str(points), inline=True)
+
+        await ctx.send(embed=embed)
+
+        # Save badge (you can adjust this)
         badges = load_badges()
         badge_id = str(len(badges) + 1)
-
         badges[badge_id] = {
             "name": badge_name,
             "description": description,
-            "image": image,
+            "image": image_url,
             "points": points,
             "created_by": ctx.author.id,
             "created_at": datetime.now(EST).isoformat()
         }
-
         save_badges(badges)
 
-        embed = discord.Embed(
-            title="🛡️ New Badge Created",
-            description=f"**{badge_name}** has been added to the badge collection!",
-            color=COLORS["success"]
-        )
-        embed.add_field(name="Description", value=description, inline=False)
-        if image:
-            if image.startswith("http"):
-                embed.set_thumbnail(url=image)
-            else:
-                embed.add_field(name="Emoji", value=image, inline=True)
-        if points > 0:
-            embed.add_field(name="Points Reward", value=str(points), inline=True)
-        embed.add_field(name="Badge ID", value=badge_id, inline=True)
-
-        await ctx.send(embed=embed)
-
     except asyncio.TimeoutError:
-        await ctx.send("⏰ You took too long. Badge creation canceled.")
+        await ctx.send("⏰ You took too long. Please try again.")
+
 
 
 @bot.command(name="givebadge", help="Award a badge to a user (Admin only)")
@@ -934,12 +938,8 @@ async def end_work(ctx, proof: Optional[str] = None):
 async def user_profile(ctx, member: discord.Member = None):
     member = member or ctx.author
 
-    # Check permissions if viewing someone else's profile
     if member != ctx.author and ctx.author.id != ADMIN_ID:
-        embed = create_error_embed(
-            "Permission Denied",
-            "You can only view your own profile unless you're an admin")
-        return await ctx.send(embed=embed)
+        return await ctx.send(embed=create_error_embed("Permission Denied", "You can only view your own profile unless you're an admin"))
 
     logs = load_logs()
     user_logs = logs.get(str(member.id), {})
@@ -955,57 +955,94 @@ async def user_profile(ctx, member: discord.Member = None):
     if member.avatar:
         embed.set_thumbnail(url=member.avatar.url)
 
-    # Basic info
-    embed.add_field(
-        name="Member Since",
-        value=member.joined_at.strftime("%B %d, %Y"),
-        inline=True
-    )
+    embed.add_field(name="Member Since", value=member.joined_at.strftime("%B %d, %Y"), inline=True)
+    embed.add_field(name="Log Entries", value=f"{len(user_logs)} this week", inline=True)
 
-    # Log stats
-    embed.add_field(
-        name="Log Entries",
-        value=f"{len(user_logs)} this week",
-        inline=True
-    )
-
-    # Task stats
     assigned_tasks = len(bot.task_assignments.get(member.id, {}))
     completed_tasks = sum(
         1 for task in bot.task_assignments.get(member.id, {}).values()
-        if task.get("status") == "Completed")
+        if task.get("status") == "Completed"
+    )
     embed.add_field(
         name="Tasks",
         value=f"Assigned: {assigned_tasks}\nCompleted: {completed_tasks}",
         inline=True
     )
 
-    # Badges display
     if user_badges:
-        badge_list = []
-        for badge_id in user_badges[:5]:  # Show first 5 badges
-            if badge_id in badges:
-                badge = badges[badge_id]
-                display = badge.get("image", "🛡️") + " " + badge["name"]
-                badge_list.append(display)
-        
-        badge_text = "\n".join(badge_list)
-        if len(user_badges) > 5:
-            badge_text += f"\n...and {len(user_badges)-5} more"
-        
-        embed.add_field(
-            name=f"Badges ({len(user_badges)})",
-            value=badge_text,
-            inline=False
-        )
+        sample = []
+        for badge_id in user_badges[:3]:
+            badge = badges.get(badge_id)
+            if badge:
+                sample.append(badge.get("image", "🏅") + " " + badge["name"])
+        badge_text = "\n".join(sample)
+        if len(user_badges) > 3:
+            badge_text += f"\n...and `{len(user_badges) - 3}` more"
+
+        embed.add_field(name=f"Badges ({len(user_badges)})", value=badge_text, inline=False)
+
+        view = View()
+        view.add_item(ViewBadgesButton(user_badges, badges))
+        await ctx.send(embed=embed, view=view)
     else:
-        embed.add_field(
-            name="Badges",
-            value="No badges yet. Complete tasks to earn some!",
-            inline=False
+        embed.add_field(name="Badges", value="No badges yet. Complete tasks to earn some!", inline=False)
+        await ctx.send(embed=embed)
+
+class ViewBadgesButton(Button):
+    def __init__(self, user_badges, all_badges):
+        super().__init__(label="🔍 View All Badges", style=discord.ButtonStyle.primary)
+        self.user_badges = user_badges
+        self.all_badges = all_badges
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            embed=self.create_badge_embed(0),
+            view=BadgePagination(self.user_badges, self.all_badges, 0),
+            ephemeral=True
         )
 
-    await ctx.send(embed=embed)
+    def create_badge_embed(self, index):
+        badge_id = self.user_badges[index]
+        badge = self.all_badges.get(badge_id, {})
+        embed = discord.Embed(
+            title=f"🏅 {badge.get('name', 'Unknown Badge')}",
+            description=badge.get("description", "No description."),
+            color=COLORS["secondary"]
+        )
+        if badge.get("image", "").startswith("http"):
+            embed.set_thumbnail(url=badge["image"])
+        elif badge.get("image"):
+            embed.description = f"{badge['image']} {badge['description']}"
+        embed.set_footer(text=f"Badge {index+1} of {len(self.user_badges)}")
+        return embed
+
+class BadgePagination(View):
+    def __init__(self, user_badges, all_badges, index):
+        super().__init__()
+        self.user_badges = user_badges
+        self.all_badges = all_badges
+        self.index = index
+
+        self.prev_button = Button(label="⬅️ Previous", style=discord.ButtonStyle.secondary)
+        self.next_button = Button(label="➡️ Next", style=discord.ButtonStyle.secondary)
+
+        self.prev_button.callback = self.prev_page
+        self.next_button.callback = self.next_page
+
+        if index > 0:
+            self.add_item(self.prev_button)
+        if index < len(user_badges) - 1:
+            self.add_item(self.next_button)
+
+    async def prev_page(self, interaction: discord.Interaction):
+        new_index = self.index - 1
+        embed = ViewBadgesButton(self.user_badges, self.all_badges).create_badge_embed(new_index)
+        await interaction.response.edit_message(embed=embed, view=BadgePagination(self.user_badges, self.all_badges, new_index))
+
+    async def next_page(self, interaction: discord.Interaction):
+        new_index = self.index + 1
+        embed = ViewBadgesButton(self.user_badges, self.all_badges).create_badge_embed(new_index)
+        await interaction.response.edit_message(embed=embed, view=BadgePagination(self.user_badges, self.all_badges, new_index))
 
 
 class TaskCreationModal(discord.ui.Modal, title="Create New Task"):
@@ -4113,29 +4150,6 @@ async def task_chart(ctx):
     embed.set_footer(text=f"Total tasks: {len(user_tasks)}")
     await ctx.send(embed=embed)
     await update_task_channel()
-
-@bot.command(name="viewallwork", help="(Admin) View all users' work sessions")
-@is_admin()
-async def view_all_work(ctx):
-    sessions = load_work_sessions()
-
-    if not sessions:
-        return await ctx.send("⚠️ No work sessions found.")
-
-    for user_id, session in sessions.items():
-        user = await bot.fetch_user(int(user_id))
-        embed = discord.Embed(
-            title=f"🧾 Work Log for {user.display_name}",
-            color=COLORS["info"]
-        )
-        embed.add_field(name="Started", value=session.get("start_time", "N/A"), inline=True)
-        embed.add_field(name="Ended", value=session.get("end_time", "N/A"), inline=True)
-        embed.add_field(name="Duration", value=f"{session.get('duration_minutes', 0)} mins", inline=True)
-        embed.add_field(name="Points", value=str(session.get("points_earned", 0)), inline=True)
-        embed.add_field(name="Proof", value=session.get("proof", "No proof"), inline=False)
-
-        await ctx.send(embed=embed)
-
 
 @bot.command(name="sync", help="testing sync" )
 @is_admin()
